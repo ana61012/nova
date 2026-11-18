@@ -38,14 +38,15 @@ async def join(session: AsyncSession, drop_id: int, user_id: str) -> None:
     """Join the line. Idempotent: joining twice keeps your original place."""
     existing = await _entry(session, drop_id, user_id)
     lapsed = existing is not None and (
-        existing.status == QueueStatus.EXPIRED
+        # Missed the window, or finished/left: the old entry is over, so you may rejoin.
+        existing.status in (QueueStatus.EXPIRED, QueueStatus.DONE)
         # Window ran out but the admitter has not swept the row yet: same thing.
         or (existing.status == QueueStatus.ADMITTED and _aware(existing.admit_expires_at) <= _now())
     )
     if existing is not None and not lapsed:
-        return
+        return  # still waiting or actively shopping: keep your place
     if existing is not None:
-        # Missed your window: you go to the back, not back to your old spot.
+        # Rejoining always goes to the back, never back to your old spot.
         await session.execute(delete(QueueEntry).where(QueueEntry.id == existing.id))
     session.add(QueueEntry(drop_id=drop_id, user_id=user_id))
     try:

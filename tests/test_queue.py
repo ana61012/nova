@@ -85,6 +85,24 @@ async def test_expired_user_rejoins_at_the_back(api):
     assert (await _status(api, a))["position"] == 2  # behind b now
 
 
+async def test_can_rejoin_after_finishing_or_leaving(api):
+    a, b = await signup(api, "a"), await signup(api, "b")
+    await api.post("/api/queue/join", headers=a)
+    await api.post("/api/queue/join", headers=b)
+    await _admit(batch=1, max_active=1)          # a is shopping
+    await api.post("/api/queue/leave", headers=a)  # a taps "Done shopping"
+    assert (await _status(api, a))["state"] == "done"
+
+    rejoined = (await api.post("/api/queue/join", headers=a)).json()
+    assert rejoined["state"] == "waiting"
+    assert rejoined["position"] == 2             # behind b, not back at the front
+    assert (await _status(api, b))["position"] == 1
+
+    # Leaving while still waiting also lets you come back.
+    await api.post("/api/queue/leave", headers=b)
+    assert (await api.post("/api/queue/join", headers=b)).json()["state"] == "waiting"
+
+
 async def test_reserving_requires_admission(api, monkeypatch):
     monkeypatch.setattr(settings, "queue_required", True)
     h = await signup(api, "eager")
