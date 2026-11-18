@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DropEngine · Live</title>
+<style>
+  :root { --bg:#0b0b0d; --panel:#141418; --line:#26262d; --text:#f3f3f5; --muted:#8b8b96;
+          --accent:#c6ff3d; --danger:#ff5a5f; --warn:#ffb020; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header, main { max-width: 1000px; margin: 0 auto; padding: 24px 20px 8px; }
+  h1 { margin:0; font-size: 24px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .tiles { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap:12px; margin-bottom: 20px; }
+  .tile { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; }
+  .tile .k { color:var(--muted); font-size:12px; }
+  .tile .v { font-size: 28px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .ok { color: var(--accent); } .bad { color: var(--danger); }
+  table { width:100%; border-collapse: collapse; background:var(--panel); border:1px solid var(--line);
+          border-radius:12px; overflow:hidden; font-variant-numeric: tabular-nums; }
+  th, td { text-align:left; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 14px; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  tr:last-child td { border-bottom: 0; }
+  .bar { height:6px; background:#23232a; border-radius:99px; overflow:hidden; min-width:120px; display:flex; }
+  .bar i { display:block; height:100%; }
+  .legend { color: var(--muted); font-size: 12px; margin: 8px 0 24px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Live drop dashboard</h1>
+  <div class="sub"><span id="drop">…</span> · refreshes every second · <a href="/">shop</a></div>
+</header>
+<main>
+  <div class="tiles">
+    <div class="tile"><div class="k">Waiting in queue</div><div class="v" id="waiting">0</div></div>
+    <div class="tile"><div class="k">Shopping now</div><div class="v" id="admitted">0</div></div>
+    <div class="tile"><div class="k">Orders / sec</div><div class="v" id="ops">0.0</div></div>
+    <div class="tile"><div class="k">Paid orders</div><div class="v" id="paid">0</div></div>
+    <div class="tile"><div class="k">Revenue</div><div class="v" id="rev">₹0</div></div>
+    <div class="tile"><div class="k">Outbox backlog</div><div class="v" id="outbox">0</div></div>
+    <div class="tile"><div class="k">Oversell check</div><div class="v" id="audit">…</div></div>
+  </div>
+
+  <table>
+    <thead><tr><th>Product</th><th>Stock</th><th>Available</th><th>Held</th><th>Sold</th><th>Audit</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div class="legend">Bar: <span class="ok">sold</span> · <span style="color:var(--warn)">held (unpaid)</span> · available (empty). Audit: available + held + sold = total.</div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const money = (c) => "₹" + Math.round(c / 100).toLocaleString("en-IN");
+let prev = null;
+
+async function tick() {
+  let s;
+  try { s = await (await fetch("/api/stats")).json(); } catch { return; }
+  const now = performance.now();
+  $("drop").textContent = s.drop || "no drop";
+  $("waiting").textContent = s.queue.waiting;
+  $("admitted").textContent = s.queue.admitted;
+  const paid = s.orders.by_status.paid || 0;
+  $("paid").textContent = paid;
+  $("rev").textContent = money(s.orders.revenue_cents);
+  $("outbox").textContent = s.outbox_pending;
+  const a = $("audit");
+  a.textContent = s.all_consistent ? "PASS" : "FAIL";
+  a.className = "v " + (s.all_consistent ? "ok" : "bad");
+
+  // Orders per second = new orders since the previous poll.
+  if (prev) {
+    const dt = (now - prev.t) / 1000;
+    $("ops").textContent = Math.max(0, (s.orders.total - prev.total) / dt).toFixed(1);
+  }
+  prev = { t: now, total: s.orders.total };
+
+  $("rows").innerHTML = s.products.map((p) => {
+    const w = (n) => (n / p.total) * 100;
+    return `<tr>
+      <td>${p.emoji} ${p.name}</td>
+      <td><div class="bar"><i style="width:${w(p.sold)}%;background:var(--accent)"></i><i style="width:${w(p.held)}%;background:var(--warn)"></i></div></td>
+      <td>${p.available} / ${p.total}</td><td>${p.held}</td><td>${p.sold}</td>
+      <td class="${p.consistent ? "ok" : "bad"}">${p.consistent ? "✓" : "✗"}</td></tr>`;
+  }).join("");
+}
+tick(); setInterval(tick, 1000);
+</script>
+</body>
+</html>

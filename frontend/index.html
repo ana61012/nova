@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DropEngine</title>
+<style>
+  :root {
+    --bg: #0b0b0d; --panel: #141418; --line: #26262d; --text: #f3f3f5;
+    --muted: #8b8b96; --accent: #c6ff3d; --danger: #ff5a5f; --warn: #ffb020;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 28px 20px 8px; max-width: 1000px; margin: 0 auto; display: flex;
+    justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 28px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); font-size: 14px; margin-top: 4px; }
+  .pill { font-size: 12px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px;
+    color: var(--muted); display: flex; gap: 10px; align-items: center; }
+  .pill b { color: var(--accent); font-weight: 600; }
+  .pill button { padding: 0; background: none; color: var(--muted); font-size: 12px; text-decoration: underline; }
+  main { max-width: 1000px; margin: 0 auto; padding: 16px 20px 80px; }
+  .hidden { display: none !important; }
+
+  /* auth */
+  .auth { max-width: 380px; margin: 48px auto; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; padding: 22px; display: flex; flex-direction: column; gap: 12px; }
+  .auth h2 { margin: 0 0 4px; font-size: 20px; }
+  input { font: inherit; background: #0f0f12; color: var(--text); border: 1px solid var(--line);
+    border-radius: 10px; padding: 11px 12px; width: 100%; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .err { color: var(--danger); font-size: 13px; min-height: 18px; }
+
+  /* queue panel */
+  .queue { border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; margin-bottom: 16px;
+    display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap;
+    background: var(--panel); }
+  .queue.in { border-color: var(--accent); background: linear-gradient(180deg, rgba(198,255,61,.08), var(--panel)); }
+  .queue .big { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .queue.in .big { color: var(--accent); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px;
+    display: flex; flex-direction: column; gap: 10px; }
+  .emoji { font-size: 56px; text-align: center; padding: 14px 0; background: #1b1b21; border-radius: 10px; }
+  .name { font-weight: 600; }
+  .price { color: var(--muted); font-size: 14px; }
+  .bar { height: 6px; background: #23232a; border-radius: 99px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; transition: width .4s ease, background .4s; }
+  .stock { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between;
+    font-variant-numeric: tabular-nums; }
+  button { font: inherit; cursor: pointer; border: 0; border-radius: 10px; padding: 11px 14px; font-weight: 600; }
+  .buy { background: var(--accent); color: #0b0b0d; }
+  .buy:disabled { background: #2a2a31; color: var(--muted); cursor: not-allowed; }
+  .ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  .danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+
+  .hold, .done { margin-top: 22px; border: 1px solid var(--accent); border-radius: 14px; padding: 16px;
+    background: linear-gradient(180deg, rgba(198,255,61,.08), transparent); }
+  .timer { font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--accent); }
+  .timer.low { color: var(--warn); }
+  .row { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #1f1f26;
+    border: 1px solid var(--line); padding: 12px 16px; border-radius: 10px; opacity: 0;
+    transition: opacity .2s; pointer-events: none; max-width: 90vw; z-index: 5; }
+  #toast.show { opacity: 1; }
+  #toast.err { border-color: var(--danger); }
+  footer { color: var(--muted); font-size: 12px; text-align: center; padding: 20px; }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 id="dropName">DropEngine</h1>
+    <div class="sub">Limited stock. Fair queue. Holds expire. No oversells.</div>
+  </div>
+  <div class="pill hidden" id="who"><span id="email"></span><button id="logout">Log out</button></div>
+</header>
+
+<main>
+  <!-- sign in -->
+  <form class="auth hidden" id="auth">
+    <h2>Join the drop</h2>
+    <input id="authEmail" type="email" placeholder="Email" autocomplete="email" required>
+    <input id="authPass" type="password" placeholder="Password (8+ characters)" minlength="8" autocomplete="current-password" required>
+    <div class="err" id="authErr"></div>
+    <div class="row">
+      <button class="buy" type="submit" data-mode="signup" style="flex:1">Create account</button>
+      <button class="ghost" type="submit" data-mode="login" style="flex:1">Log in</button>
+    </div>
+  </form>
+
+  <!-- shop -->
+  <div id="shop" class="hidden">
+    <section class="queue" id="queue"></section>
+    <div id="grid" class="grid"></div>
+
+    <section id="hold" class="hold hidden">
+      <div class="row">
+        <div>
+          <div class="sub">Reserved for you</div>
+          <div id="holdItem" class="name"></div>
+          <div class="sub" id="holdStatus"></div>
+        </div>
+        <div class="timer" id="timer">--:--</div>
+        <div class="actions" id="holdActions"></div>
+      </div>
+    </section>
+
+    <section id="done" class="done hidden"></section>
+  </div>
+</main>
+
+<footer>DropEngine · <a href="/dashboard">live dashboard</a> · payments are simulated</footer>
+<div id="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const money = (c) => "₹" + (c / 100).toLocaleString("en-IN");
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+let session = JSON.parse(localStorage.getItem("session") || "null"); // { token, email }
+let products = [];
+let queue = { state: "none" };
+let queueAt = Date.now();
+let hold = null;   // { id, product_id, expires_at }
+let order = null;  // { id, amount_cents }
+let stream = null, pollTimer = null;
+
+function toast(msg, isErr) {
+  const t = $("#toast");
+  t.textContent = msg; t.className = "show" + (isErr ? " err" : "");
+  clearTimeout(toast._t); toast._t = setTimeout(() => (t.className = ""), 3000);
+}
+
+async function api(path, opts = {}) {
+  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  if (session) headers.Authorization = "Bearer " + session.token;
+  const r = await fetch(path, { ...opts, headers });
+  if (r.status === 401 && session && !path.startsWith("/api/auth")) { logout(); throw new Error("signed out"); }
+  return r;
+}
+
+async function detail(r) {
+  try { return (await r.json()).detail || ""; } catch { return ""; }
+}
+
+// ------------------------------------------------------------------ auth
+document.querySelector("#auth").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const mode = e.submitter?.dataset.mode || "login";
+  $("#authErr").textContent = "";
+  const r = await api("/api/auth/" + mode, {
+    method: "POST",
+    body: JSON.stringify({ email: $("#authEmail").value.trim(), password: $("#authPass").value }),
+  });
+  if (!r.ok) { $("#authErr").textContent = (await detail(r)) || "Could not sign in."; return; }
+  const d = await r.json();
+  session = { token: d.token, email: d.email };
+  localStorage.setItem("session", JSON.stringify(session));
+  start();
+});
+
+function logout() {
+  session = null; hold = null; order = null; queue = { state: "none" };
+  localStorage.removeItem("session"); localStorage.removeItem("hold"); localStorage.removeItem("order");
+  if (stream) stream.close();
+  clearInterval(pollTimer);
+  show();
+}
+$("#logout").addEventListener("click", logout);
+
+function show() {
+  $("#auth").classList.toggle("hidden", !!session);
+  $("#shop").classList.toggle("hidden", !session);
+  $("#who").classList.toggle("hidden", !session);
+  if (session) $("#email").textContent = session.email;
+}
+
+// ------------------------------------------------------------------ queue (live over SSE)
+function connectStream() {
+  if (stream) stream.close();
+  // EventSource cannot send headers, so the token rides in the query string.
+  stream = new EventSource("/api/queue/stream?token=" + encodeURIComponent(session.token));
+  stream.onmessage = (e) => { queue = JSON.parse(e.data); queueAt = Date.now(); renderQueue(); renderGrid(); };
+}
+
+function renderQueue() {
+  const el = $("#queue");
+  el.classList.toggle("in", queue.state === "admitted");
+  const left = queue.expires_in == null ? null : Math.max(0, queue.expires_in - Math.floor((Date.now() - queueAt) / 1000));
+  const mm = (s) => Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  let html;
+  if (queue.state === "waiting") {
+    html = `<div><div class="sub">You are in line</div><div class="big">#${queue.position}</div>
+            <div class="sub">${queue.waiting_total} waiting in total. Your spot is saved if you refresh.</div></div>
+            <button class="ghost" data-q="leave">Leave line</button>`;
+  } else if (queue.state === "admitted") {
+    html = `<div><div class="sub">You're in. Pick your item</div><div class="big">${mm(left ?? 0)} left to shop</div></div>
+            <button class="ghost" data-q="leave">Done shopping</button>`;
+  } else if (queue.state === "expired") {
+    html = `<div><div class="sub">Your turn ran out</div><div class="big">Missed your window</div></div>
+            <button class="buy" data-q="join">Rejoin at the back</button>`;
+  } else {
+    html = `<div><div class="sub">${queue.state === "done" ? "You're done for this drop" : "The drop is live"}</div>
+            <div class="big">${queue.state === "done" ? "Thanks for shopping" : "Join the queue for a turn"}</div></div>
+            <button class="buy" data-q="join">${queue.state === "done" ? "Get back in line" : "Join queue"}</button>`;
+  }
+  el.innerHTML = html;
+}
+
+$("#queue").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-q]");
+  if (!b) return;
+  const r = await api("/api/queue/" + b.dataset.q, { method: "POST" });
+  if (r.status === 429) return toast("Slow down a little.", true);
+  if (!r.ok) return toast("Could not update the queue.", true);
+  queue = await r.json(); queueAt = Date.now(); renderQueue(); renderGrid();
+});
+
+// ------------------------------------------------------------------ catalog
+async function load() {
+  try {
+    const d = await (await api("/api/drops/current")).json();
+    $("#dropName").textContent = d.name;
+    products = d.products;
+    renderGrid();
+  } catch { /* transient; the next poll retries */ }
+}
+
+function renderGrid() {
+  const canShop = queue.state === "admitted" && !hold;
+  $("#grid").innerHTML = products.map((p) => {
+    const pct = (p.available / p.total) * 100;
+    const out = p.available === 0;
+    const color = pct < 25 ? "var(--danger)" : pct < 50 ? "var(--warn)" : "var(--accent)";
+    const label = out ? "Sold out" : hold ? "You have a hold" : queue.state !== "admitted" ? "Join the queue first" : "Reserve";
+    return `<div class="card">
+      <div class="emoji">${esc(p.image_emoji)}</div>
+      <div><div class="name">${esc(p.name)}</div><div class="price">${money(p.price_cents)}</div></div>
+      <div class="bar"><i style="width:${pct}%;background:${color}"></i></div>
+      <div class="stock"><span>${out ? "Sold out" : p.available + " left"}</span><span>of ${p.total}</span></div>
+      <button class="buy" data-id="${p.id}" ${out || !canShop ? "disabled" : ""}>${label}</button>
+    </div>`;
+  }).join("");
+}
+
+$("#grid").addEventListener("click", async (e) => {
+  const btn = e.target.closest(".buy");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  // One key per click: if the network retries this request, the server dedupes it.
+  const key = "click-" + crypto.randomUUID();
+  try {
+    const r = await api("/api/reservations", {
+      method: "POST", headers: { "Idempotency-Key": key },
+      body: JSON.stringify({ product_id: Number(btn.dataset.id), qty: 1 }),
+    });
+    if (r.status === 201 || r.status === 200) {
+      const res = await r.json();
+      setHold({ id: res.id, product_id: res.product_id, expires_at: res.expires_at }, null);
+      toast("Reserved. Check out before the timer ends.");
+    } else if (r.status === 409) toast((await detail(r)) || "Sold out.", true);
+    else if (r.status === 403) toast("Wait for your turn in the queue.", true);
+    else if (r.status === 429) toast("Slow down. Try again in " + (r.headers.get("Retry-After") || 1) + "s.", true);
+    else toast("Something went wrong.", true);
+  } catch { toast("Network error.", true); }
+  load(); renderGrid();
+});
+
+// ------------------------------------------------------------------ hold, checkout, payment
+function setHold(h, o) {
+  hold = h; order = o;
+  if (h) localStorage.setItem("hold", JSON.stringify(h)); else localStorage.removeItem("hold");
+  if (o) localStorage.setItem("order", JSON.stringify(o)); else localStorage.removeItem("order");
+  renderHold(); renderGrid();
+}
+
+function renderHold() {
+  const el = $("#hold");
+  if (!hold) { el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+  const p = products.find((x) => x.id === hold.product_id);
+  $("#holdItem").textContent = p ? `${p.image_emoji} ${p.name}` : "Your item";
+  $("#holdStatus").textContent = order ? `Order ${money(order.amount_cents)}. Awaiting payment.` : "Not checked out yet.";
+  $("#holdActions").innerHTML = order
+    ? `<button class="buy" data-h="pay">Pay now</button>
+       <button class="danger" data-h="decline">Simulate declined card</button>
+       <button class="ghost" data-h="cancel">Release</button>`
+    : `<button class="buy" data-h="checkout">Checkout</button>
+       <button class="ghost" data-h="cancel">Release</button>`;
+}
+
+$("#holdActions").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-h]");
+  if (!b || !hold) return;
+  const action = b.dataset.h;
+  b.disabled = true;
+
+  if (action === "cancel") {
+    await api("/api/reservations/" + hold.id, { method: "DELETE" });
+    setHold(null, null); toast("Hold released."); load(); return;
+  }
+  if (action === "checkout") {
+    const r = await api("/api/orders", { method: "POST", body: JSON.stringify({ reservation_id: hold.id }) });
+    if (!r.ok) { toast((await detail(r)) || "Could not start checkout.", true); setHold(null, null); return; }
+    const o = await r.json();
+    setHold(hold, { id: o.id, amount_cents: o.amount_cents });
+    return;
+  }
+  // pay / decline: the dev endpoint plays the payment gateway and sends a signed webhook
+  const outcome = action === "pay" ? "success" : "fail";
+  const r = await api(`/api/dev/payments/${order.id}/simulate?outcome=${outcome}`, { method: "POST" });
+  const d = await r.json();
+  if (d.order_status === "paid") {
+    const p = products.find((x) => x.id === hold.product_id);
+    $("#done").innerHTML = `<div class="row"><div><div class="sub">Order confirmed ✓</div>
+      <div class="name">${esc(p ? p.image_emoji + " " + p.name : "Your item")} · ${money(order.amount_cents)}</div>
+      <div class="sub">A confirmation email is queued (outbox → email consumer).</div></div>
+      <button class="ghost" id="dismiss">Dismiss</button></div>`;
+    $("#done").classList.remove("hidden");
+    $("#dismiss").onclick = () => $("#done").classList.add("hidden");
+    setHold(null, null); load();
+  } else if (outcome === "fail") {
+    toast("Card declined. Your hold is kept, try paying again.", true); renderHold();
+  } else {
+    toast("Payment did not complete (" + (d.order_status || "unknown") + ").", true); setHold(null, null); load();
+  }
+});
+
+function tick() {
+  if (queue.state === "admitted" || queue.state === "waiting") renderQueue();
+  if (!hold) return;
+  const iso = /Z|[+-]\d\d:?\d\d$/.test(hold.expires_at) ? hold.expires_at : hold.expires_at + "Z";
+  const left = Math.max(0, Math.floor((new Date(iso) - Date.now()) / 1000));
+  if (left === 0) { setHold(null, null); toast("Your hold expired.", true); load(); return; }
+  const t = $("#timer");
+  t.textContent = String(Math.floor(left / 60)).padStart(2, "0") + ":" + String(left % 60).padStart(2, "0");
+  t.className = "timer" + (left < 30 ? " low" : "");
+}
+
+// ------------------------------------------------------------------ boot
+function start() {
+  show();
+  hold = JSON.parse(localStorage.getItem("hold") || "null");
+  order = JSON.parse(localStorage.getItem("order") || "null");
+  connectStream(); load(); renderQueue(); renderHold();
+  clearInterval(pollTimer);
+  pollTimer = setInterval(load, 1500);
+}
+
+setInterval(tick, 500);
+if (session) start(); else show();
+</script>
+</body>
+</html>
