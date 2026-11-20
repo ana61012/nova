@@ -75,6 +75,7 @@ async def verify_code(session: AsyncSession, email: str, code: str) -> User | No
         .where(LoginCode.id == row.id, LoginCode.consumed_at.is_(None), LoginCode.expires_at > now,
                LoginCode.attempts < settings.otp_max_attempts)
         .values(attempts=LoginCode.attempts + 1)
+        .execution_options(synchronize_session=False)
     )
     await session.commit()
     if spent.rowcount != 1 or not hmac.compare_digest(row.code_hash, hash_code(email, code)):

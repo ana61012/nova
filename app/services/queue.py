@@ -84,6 +84,7 @@ async def admit_batch(
             QueueEntry.admit_expires_at < now,
         )
         .values(status=QueueStatus.EXPIRED)
+        .execution_options(synchronize_session=False)
     )
     active = (
         await session.execute(
