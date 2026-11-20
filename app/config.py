@@ -9,7 +9,8 @@ class Settings(BaseSettings):
 
     # Reservations
     reservation_ttl_seconds: int = 120
-    max_qty_per_order: int = 2
+    max_qty_per_product: int = 3   # per customer, across all their carts in a drop
+    max_cart_lines: int = 5        # different products in a single cart
     sweeper_interval_seconds: float = 5.0
 
     # Waiting room

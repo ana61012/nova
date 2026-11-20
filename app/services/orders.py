@@ -5,17 +5,17 @@ The rules here:
 
 * Every event id is stored once (primary key), so a replayed event is a no-op.
 * Order status only moves along ALLOWED transitions, via conditional UPDATEs.
-* A payment that lands AFTER the hold expired tries to re-take stock. If the
-  item is still available the order is paid; if someone else bought it, the
-  order is refunded instead of overselling.
+* A payment that lands AFTER the hold expired tries to re-take every line of the
+  cart, all or nothing. If everything is still available the order is paid; if
+  any line was bought by someone else, the order is refunded instead of overselling.
 * A refund event that arrives before its payment event is parked as ignored
   (a real system would retry it later).
 """
 import hashlib
 import hmac
 import json
-from datetime import datetime, timezone
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
@@ -23,10 +23,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..models import (
-    Inventory, Order, OrderStatus, Product, Reservation, ReservationStatus, WebhookEvent,
+    Order, OrderItem, OrderStatus, Product, Reservation, ReservationItem, ReservationStatus,
+    WebhookEvent, new_id,
 )
-from . import queue
-from .outbox import emit, order_payload
+from . import inventory, queue
+from .outbox import emit_order
 
 S = OrderStatus
 ALLOWED: dict[OrderStatus, set[OrderStatus]] = {
@@ -57,6 +58,16 @@ def sign(body: bytes, secret: str | None = None) -> str:
     return hmac.new((secret or settings.webhook_secret).encode(), body, hashlib.sha256).hexdigest()
 
 
+async def order_items(session: AsyncSession, order_id: str) -> list[OrderItem]:
+    return list(
+        (
+            await session.execute(
+                select(OrderItem).where(OrderItem.order_id == order_id).order_by(OrderItem.product_id)
+            )
+        ).scalars()
+    )
+
+
 # ---------------------------------------------------------------- creating orders
 
 async def create_order(session: AsyncSession, *, user_id: str, reservation_id: str) -> Order:
@@ -80,13 +91,30 @@ async def create_order(session: AsyncSession, *, user_id: str, reservation_id: s
     if res is None:
         raise ReservationInvalid(reservation_id)
 
-    product = await session.get(Product, res.product_id)
+    # Prices are frozen onto the order lines now; later price changes cannot touch it.
+    rows = (
+        await session.execute(
+            select(ReservationItem.product_id, ReservationItem.qty, Product.price_cents)
+            .join(Product, Product.id == ReservationItem.product_id)
+            .where(ReservationItem.reservation_id == res.id)
+            .order_by(ReservationItem.product_id)
+        )
+    ).all()
+
     order = Order(
-        user_id=user_id, reservation_id=res.id, product_id=res.product_id, qty=res.qty,
-        amount_cents=product.price_cents * res.qty, payment_intent_id="pi_" + uuid.uuid4().hex,
+        id=new_id(), user_id=user_id, reservation_id=res.id,
+        amount_cents=sum(qty * price for _, qty, price in rows),
+        payment_intent_id="pi_" + uuid.uuid4().hex,
     )
-    session.add(order)
     try:
+        session.add(order)
+        await session.flush()
+        session.add_all(
+            [
+                OrderItem(order_id=order.id, product_id=pid, qty=qty, unit_price_cents=price)
+                for pid, qty, price in rows
+            ]
+        )
         await session.commit()
     except IntegrityError:  # double submit raced us; unique(reservation_id) picked the winner
         await session.rollback()
@@ -108,13 +136,17 @@ async def _transition(session: AsyncSession, order: Order, to: OrderStatus, topi
     )
     if res.rowcount != 1:
         raise InvalidTransition(f"{order.id}: -> {to.value}")
-    await emit(session, topic, order_payload(order, **extra))
+    await emit_order(session, topic, order, **extra)
 
 
 async def _order_by_intent(session: AsyncSession, intent_id: str) -> Order | None:
     return (
         await session.execute(select(Order).where(Order.payment_intent_id == intent_id))
     ).scalar_one_or_none()
+
+
+async def _drop_id_of(session: AsyncSession, product_id: int) -> int:
+    return (await session.execute(select(Product.drop_id).where(Product.id == product_id))).scalar_one()
 
 
 async def _on_succeeded(session: AsyncSession, intent_id: str) -> str:
@@ -126,7 +158,8 @@ async def _on_succeeded(session: AsyncSession, intent_id: str) -> str:
     if order.status == S.REFUNDED:
         return "ignored_after_refund"
 
-    product = await session.get(Product, order.product_id)
+    lines = [(i.product_id, i.qty) for i in await order_items(session, order.id)]
+    drop_id = await _drop_id_of(session, lines[0][0])
 
     if order.status == S.PENDING_PAYMENT:
         # Normal path: the hold is still ours, so turn it into a sale.
@@ -137,31 +170,32 @@ async def _on_succeeded(session: AsyncSession, intent_id: str) -> str:
         )
         if flipped.rowcount == 1:
             await _transition(session, order, S.PAID, "order.paid")
-            await queue.finish(session, product.drop_id, order.user_id)  # frees the queue slot
+            await queue.finish(session, drop_id, order.user_id)  # frees the queue slot
             return "paid"
         # The sweeper expired the hold a moment ago; fall through to the late path.
 
-    # Late payment: the stock went back on the shelf. Try to take it again.
-    taken = await session.execute(
-        update(Inventory)
-        .where(Inventory.product_id == order.product_id, Inventory.available >= order.qty)
-        .values(available=Inventory.available - order.qty)
-    )
-    if taken.rowcount == 1:
-        await session.execute(
-            update(Reservation)
-            .where(
-                Reservation.id == order.reservation_id,
-                Reservation.status.in_([ReservationStatus.EXPIRED, ReservationStatus.RELEASED]),
-            )
-            .values(status=ReservationStatus.CONVERTED)
+    # Late payment: the stock went back on the shelf. Try to take the whole cart again.
+    try:
+        await inventory.take_lines(session, order.user_id, lines, settings.max_qty_per_product)
+    except (inventory.SoldOut, inventory.LimitExceeded):
+        # take_lines already undid any partial take, so nothing leaked.
+        await _transition(
+            session, order, S.REFUNDED, "order.refunded",
+            reason="unavailable_after_expiry", was_paid=False,
         )
-        await _transition(session, order, S.PAID, "order.paid", late=True)
-        await queue.finish(session, product.drop_id, order.user_id)
-        return "paid_late"
+        return "refunded_late"
 
-    await _transition(session, order, S.REFUNDED, "order.refunded", reason="sold_out_after_expiry")
-    return "refunded_late"
+    await session.execute(
+        update(Reservation)
+        .where(
+            Reservation.id == order.reservation_id,
+            Reservation.status.in_([ReservationStatus.EXPIRED, ReservationStatus.RELEASED]),
+        )
+        .values(status=ReservationStatus.CONVERTED)
+    )
+    await _transition(session, order, S.PAID, "order.paid", late=True)
+    await queue.finish(session, drop_id, order.user_id)
+    return "paid_late"
 
 
 async def _on_refunded(session: AsyncSession, intent_id: str) -> str:
@@ -170,17 +204,14 @@ async def _on_refunded(session: AsyncSession, intent_id: str) -> str:
         return "unknown_order"
     if order.status != S.PAID:
         return "ignored_out_of_order"
-    await _transition(session, order, S.REFUNDED, "order.refunded", reason="gateway_refund")
+    lines = [(i.product_id, i.qty) for i in await order_items(session, order.id)]
+    await _transition(session, order, S.REFUNDED, "order.refunded", reason="gateway_refund", was_paid=True)
     await session.execute(
         update(Reservation)
         .where(Reservation.id == order.reservation_id, Reservation.status == ReservationStatus.CONVERTED)
         .values(status=ReservationStatus.RELEASED)
     )
-    await session.execute(
-        update(Inventory)
-        .where(Inventory.product_id == order.product_id)
-        .values(available=Inventory.available + order.qty)
-    )
+    await inventory.give_back_lines(session, order.user_id, lines)  # stock and quota, every line
     return "refunded"
 
 

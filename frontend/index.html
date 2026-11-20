@@ -18,7 +18,6 @@
   .sub { color: var(--muted); font-size: 14px; margin-top: 4px; }
   .pill { font-size: 12px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px;
     color: var(--muted); display: flex; gap: 10px; align-items: center; }
-  .pill b { color: var(--accent); font-weight: 600; }
   .pill button { padding: 0; background: none; color: var(--muted); font-size: 12px; text-decoration: underline; }
   main { max-width: 1000px; margin: 0 auto; padding: 16px 20px 80px; }
   .hidden { display: none !important; }
@@ -40,9 +39,11 @@
   .queue .big { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .queue.in .big { color: var(--accent); }
 
+  /* products */
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px;
     display: flex; flex-direction: column; gap: 10px; }
+  .card.in-cart { border-color: var(--accent); }
   .emoji { font-size: 56px; text-align: center; padding: 14px 0; background: #1b1b21; border-radius: 10px; }
   .name { font-weight: 600; }
   .price { color: var(--muted); font-size: 14px; }
@@ -50,14 +51,34 @@
   .bar > i { display: block; height: 100%; transition: width .4s ease, background .4s; }
   .stock { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between;
     font-variant-numeric: tabular-nums; }
+  .stepper { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    background: #0f0f12; border: 1px solid var(--line); border-radius: 10px; padding: 4px; }
+  .stepper .qty { font-weight: 700; font-size: 18px; min-width: 28px; text-align: center;
+    font-variant-numeric: tabular-nums; }
+  .stepper button { width: 38px; height: 38px; padding: 0; font-size: 20px; line-height: 1;
+    background: #1f1f26; color: var(--text); }
+  .stepper button:disabled { opacity: .35; cursor: not-allowed; }
+  .card.sold-out { opacity: .55; }
+
   button { font: inherit; cursor: pointer; border: 0; border-radius: 10px; padding: 11px 14px; font-weight: 600; }
   .buy { background: var(--accent); color: #0b0b0d; }
   .buy:disabled { background: #2a2a31; color: var(--muted); cursor: not-allowed; }
   .ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
   .danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+  .link { background: none; padding: 0; color: var(--muted); font-size: 12px; font-weight: 500;
+    text-decoration: underline; }
 
-  .hold, .done { margin-top: 22px; border: 1px solid var(--accent); border-radius: 14px; padding: 16px;
-    background: linear-gradient(180deg, rgba(198,255,61,.08), transparent); }
+  /* cart, hold, receipt */
+  .panel { margin-top: 22px; border: 1px solid var(--line); border-radius: 14px; padding: 16px;
+    background: var(--panel); }
+  .panel.live { border-color: var(--accent);
+    background: linear-gradient(180deg, rgba(198,255,61,.08), var(--panel)); }
+  .lines { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+  .line { display: flex; justify-content: space-between; gap: 12px; align-items: baseline;
+    font-variant-numeric: tabular-nums; }
+  .line .l { display: flex; gap: 10px; align-items: baseline; }
+  .total { display: flex; justify-content: space-between; font-weight: 700; font-size: 18px;
+    padding-top: 10px; border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; }
   .timer { font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--accent); }
   .timer.low { color: var(--warn); }
   .row { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
@@ -98,19 +119,22 @@
     <section class="queue" id="queue"></section>
     <div id="grid" class="grid"></div>
 
-    <section id="hold" class="hold hidden">
+    <section id="cart" class="panel hidden"></section>
+
+    <section id="hold" class="panel live hidden">
       <div class="row">
         <div>
           <div class="sub">Reserved for you</div>
-          <div id="holdItem" class="name"></div>
           <div class="sub" id="holdStatus"></div>
         </div>
         <div class="timer" id="timer">--:--</div>
-        <div class="actions" id="holdActions"></div>
       </div>
+      <div class="lines" id="holdLines"></div>
+      <div class="total"><span>Total</span><span id="holdTotal"></span></div>
+      <div class="actions" id="holdActions" style="margin-top:12px"></div>
     </section>
 
-    <section id="done" class="done hidden"></section>
+    <section id="done" class="panel live hidden"></section>
   </div>
 </main>
 
@@ -121,19 +145,22 @@
 const $ = (s) => document.querySelector(s);
 const money = (c) => "₹" + (c / 100).toLocaleString("en-IN");
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const readJSON = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
 
-let session = JSON.parse(localStorage.getItem("session") || "null"); // { token, email }
+let session = readJSON("session", null);      // { token, email }
 let products = [];
+let limits = { max_qty_per_product: 3, max_cart_lines: 5 };
 let queue = { state: "none" };
 let queueAt = Date.now();
-let hold = null;   // { id, product_id, expires_at }
-let order = null;  // { id, amount_cents }
-let stream = null, pollTimer = null;
+let cart = {};      // { [productId]: qty }: a wish list. It holds NO stock until you reserve.
+let hold = null;    // { id, items: [{product_id, qty}], expires_at }
+let order = null;   // { id, amount_cents }
+let stream = null, pollTimer = null, gridSig = "";
 
 function toast(msg, isErr) {
   const t = $("#toast");
   t.textContent = msg; t.className = "show" + (isErr ? " err" : "");
-  clearTimeout(toast._t); toast._t = setTimeout(() => (t.className = ""), 3000);
+  clearTimeout(toast._t); toast._t = setTimeout(() => (t.className = ""), 3200);
 }
 
 async function api(path, opts = {}) {
@@ -144,9 +171,14 @@ async function api(path, opts = {}) {
   return r;
 }
 
+// FastAPI sends a string for our own errors and a list for validation errors.
 async function detail(r) {
-  try { return (await r.json()).detail || ""; } catch { return ""; }
+  try { const d = (await r.json()).detail; return typeof d === "string" ? d : "That request was not valid."; }
+  catch { return ""; }
 }
+
+const productOf = (id) => products.find((p) => p.id === Number(id));
+const linesTotal = (lines) => lines.reduce((sum, l) => sum + (productOf(l.product_id)?.price_cents || 0) * l.qty, 0);
 
 // ------------------------------------------------------------------ auth
 document.querySelector("#auth").addEventListener("submit", async (e) => {
@@ -165,8 +197,8 @@ document.querySelector("#auth").addEventListener("submit", async (e) => {
 });
 
 function logout() {
-  session = null; hold = null; order = null; queue = { state: "none" };
-  localStorage.removeItem("session"); localStorage.removeItem("hold"); localStorage.removeItem("order");
+  session = null; hold = null; order = null; cart = {}; queue = { state: "none" };
+  for (const k of ["session", "hold", "order", "cart"]) localStorage.removeItem(k);
   if (stream) stream.close();
   clearInterval(pollTimer);
   show();
@@ -185,7 +217,7 @@ function connectStream() {
   if (stream) stream.close();
   // EventSource cannot send headers, so the token rides in the query string.
   stream = new EventSource("/api/queue/stream?token=" + encodeURIComponent(session.token));
-  stream.onmessage = (e) => { queue = JSON.parse(e.data); queueAt = Date.now(); renderQueue(); renderGrid(); };
+  stream.onmessage = (e) => { queue = JSON.parse(e.data); queueAt = Date.now(); renderQueue(); renderCart(); };
 }
 
 function renderQueue() {
@@ -195,11 +227,11 @@ function renderQueue() {
   const mm = (s) => Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
   let html;
   if (queue.state === "waiting") {
-    html = `<div><div class="sub">You are in line</div><div class="big">#${queue.position}</div>
+    html = `<div><div class="sub">You are in line. Build your cart while you wait.</div><div class="big">#${queue.position}</div>
             <div class="sub">${queue.waiting_total} waiting in total. Your spot is saved if you refresh.</div></div>
             <button class="ghost" data-q="leave">Leave line</button>`;
   } else if (queue.state === "admitted") {
-    html = `<div><div class="sub">You're in. Pick your item</div><div class="big">${mm(left ?? 0)} left to shop</div></div>
+    html = `<div><div class="sub">You're in. Reserve your cart</div><div class="big">${mm(left ?? 0)} left to shop</div></div>
             <button class="ghost" data-q="leave">Done shopping</button>`;
   } else if (queue.state === "expired") {
     html = `<div><div class="sub">Your turn ran out</div><div class="big">Missed your window</div></div>
@@ -218,7 +250,7 @@ $("#queue").addEventListener("click", async (e) => {
   const r = await api("/api/queue/" + b.dataset.q, { method: "POST" });
   if (r.status === 429) return toast("Slow down a little.", true);
   if (!r.ok) return toast("Could not update the queue.", true);
-  queue = await r.json(); queueAt = Date.now(); renderQueue(); renderGrid();
+  queue = await r.json(); queueAt = Date.now(); renderQueue(); renderCart();
 });
 
 // ------------------------------------------------------------------ catalog
@@ -227,48 +259,113 @@ async function load() {
     const d = await (await api("/api/drops/current")).json();
     $("#dropName").textContent = d.name;
     products = d.products;
-    renderGrid();
+    limits = d.limits;
+    clampCart();
+    renderGrid(); renderCart(); renderHold();
   } catch { /* transient; the next poll retries */ }
 }
 
+const saveCart = () => localStorage.setItem("cart", JSON.stringify(cart));
+const maxFor = (p) => Math.max(0, Math.min(limits.max_qty_per_product, p.available));
+
+// Keep the cart honest as stock changes: drop sold-out lines, trim quantities.
+function clampCart() {
+  if (!products.length) return;  // not loaded yet: never wipe a saved cart on a slow first load
+  let dropped = false, changed = false;
+  for (const [id, qty] of Object.entries(cart)) {
+    const p = productOf(id), max = p ? maxFor(p) : 0;
+    if (max === 0) { delete cart[id]; dropped = changed = true; }
+    else if (qty > max) { cart[id] = max; changed = true; }
+  }
+  if (changed) saveCart();
+  if (dropped) toast("Some items sold out and were removed from your cart.", true);
+}
+
 function renderGrid() {
-  const canShop = queue.state === "admitted" && !hold;
+  const editable = !hold;
+  const sig = JSON.stringify([products, cart, editable]);
+  if (sig === gridSig) return;   // skip identical frames so clicks are never lost to a re-render
+  gridSig = sig;
   $("#grid").innerHTML = products.map((p) => {
     const pct = (p.available / p.total) * 100;
     const out = p.available === 0;
+    const qty = cart[p.id] || 0, max = maxFor(p);
     const color = pct < 25 ? "var(--danger)" : pct < 50 ? "var(--warn)" : "var(--accent)";
-    const label = out ? "Sold out" : hold ? "You have a hold" : queue.state !== "admitted" ? "Join the queue first" : "Reserve";
-    return `<div class="card">
+    return `<div class="card ${qty ? "in-cart" : ""} ${out ? "sold-out" : ""}">
       <div class="emoji">${esc(p.image_emoji)}</div>
       <div><div class="name">${esc(p.name)}</div><div class="price">${money(p.price_cents)}</div></div>
       <div class="bar"><i style="width:${pct}%;background:${color}"></i></div>
-      <div class="stock"><span>${out ? "Sold out" : p.available + " left"}</span><span>of ${p.total}</span></div>
-      <button class="buy" data-id="${p.id}" ${out || !canShop ? "disabled" : ""}>${label}</button>
+      <div class="stock"><span>${out ? "Sold out" : p.available + " left"}</span><span>max ${limits.max_qty_per_product} each</span></div>
+      <div class="stepper">
+        <button data-step="-1" data-id="${p.id}" ${!editable || qty === 0 ? "disabled" : ""} aria-label="Remove one">−</button>
+        <span class="qty">${qty}</span>
+        <button data-step="1" data-id="${p.id}" ${!editable || out || qty >= max ? "disabled" : ""} aria-label="Add one">+</button>
+      </div>
     </div>`;
   }).join("");
 }
 
-$("#grid").addEventListener("click", async (e) => {
-  const btn = e.target.closest(".buy");
-  if (!btn || btn.disabled) return;
-  btn.disabled = true;
+$("#grid").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-step]");
+  if (!b || b.disabled) return;
+  const id = b.dataset.id, dir = Number(b.dataset.step), p = productOf(id);
+  const current = cart[id] || 0;
+  if (dir > 0 && current === 0 && Object.keys(cart).length >= limits.max_cart_lines) {
+    return toast(`Up to ${limits.max_cart_lines} different items per cart.`, true);
+  }
+  const next = Math.max(0, Math.min(maxFor(p), current + dir));
+  if (next === 0) delete cart[id]; else cart[id] = next;
+  saveCart(); renderGrid(); renderCart();
+});
+
+// ------------------------------------------------------------------ cart (client-side wish list)
+function renderCart() {
+  const el = $("#cart");
+  const lines = Object.entries(cart).map(([id, qty]) => ({ product_id: Number(id), qty })).filter((l) => productOf(l.product_id));
+  if (hold || lines.length === 0) { el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+  const units = lines.reduce((s, l) => s + l.qty, 0);
+  const admitted = queue.state === "admitted";
+  const label = admitted ? "Reserve cart" : queue.state === "waiting" ? "Waiting for your turn…" : "Join the queue first";
+  el.innerHTML = `
+    <div class="row"><div><div class="name">Your cart · ${units} item${units === 1 ? "" : "s"}</div>
+      <div class="sub">Nothing is held until you reserve. Stock can still sell out.</div></div>
+      <button class="link" data-c="clear">Clear cart</button></div>
+    <div class="lines">${lines.map((l) => {
+      const p = productOf(l.product_id);
+      return `<div class="line"><span class="l"><span>${esc(p.image_emoji)} ${esc(p.name)} × ${l.qty}</span>
+        <button class="link" data-c="remove" data-id="${l.product_id}">Remove</button></span>
+        <span>${money(p.price_cents * l.qty)}</span></div>`;
+    }).join("")}</div>
+    <div class="total"><span>Total</span><span>${money(linesTotal(lines))}</span></div>
+    <div class="actions" style="margin-top:12px"><button class="buy" data-c="reserve" ${admitted ? "" : "disabled"}>${label}</button></div>`;
+}
+
+$("#cart").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-c]");
+  if (!b || b.disabled) return;
+  if (b.dataset.c === "clear") { cart = {}; saveCart(); renderGrid(); renderCart(); return; }
+  if (b.dataset.c === "remove") { delete cart[b.dataset.id]; saveCart(); renderGrid(); renderCart(); return; }
+
+  b.disabled = true;
+  const items = Object.entries(cart).map(([id, qty]) => ({ product_id: Number(id), qty }));
   // One key per click: if the network retries this request, the server dedupes it.
-  const key = "click-" + crypto.randomUUID();
+  const key = "cart-" + crypto.randomUUID();
   try {
     const r = await api("/api/reservations", {
-      method: "POST", headers: { "Idempotency-Key": key },
-      body: JSON.stringify({ product_id: Number(btn.dataset.id), qty: 1 }),
+      method: "POST", headers: { "Idempotency-Key": key }, body: JSON.stringify({ items }),
     });
     if (r.status === 201 || r.status === 200) {
       const res = await r.json();
-      setHold({ id: res.id, product_id: res.product_id, expires_at: res.expires_at }, null);
-      toast("Reserved. Check out before the timer ends.");
-    } else if (r.status === 409) toast((await detail(r)) || "Sold out.", true);
+      cart = {}; saveCart();
+      setHold({ id: res.id, items: res.items, expires_at: res.expires_at }, null);
+      toast("Cart reserved. Check out before the timer ends.");
+    } else if (r.status === 409) toast((await detail(r)) || "Something in your cart sold out.", true);
     else if (r.status === 403) toast("Wait for your turn in the queue.", true);
     else if (r.status === 429) toast("Slow down. Try again in " + (r.headers.get("Retry-After") || 1) + "s.", true);
-    else toast("Something went wrong.", true);
+    else toast((await detail(r)) || "Something went wrong.", true);
   } catch { toast("Network error.", true); }
-  load(); renderGrid();
+  gridSig = ""; load();
 });
 
 // ------------------------------------------------------------------ hold, checkout, payment
@@ -276,16 +373,23 @@ function setHold(h, o) {
   hold = h; order = o;
   if (h) localStorage.setItem("hold", JSON.stringify(h)); else localStorage.removeItem("hold");
   if (o) localStorage.setItem("order", JSON.stringify(o)); else localStorage.removeItem("order");
-  renderHold(); renderGrid();
+  gridSig = ""; renderHold(); renderGrid(); renderCart();
+  tick();  // show the countdown immediately instead of "--:--" until the next half-second tick
 }
+
+const linesHtml = (items) => items.map((l) => {
+  const p = productOf(l.product_id);
+  return `<div class="line"><span>${esc(p ? p.image_emoji + " " + p.name : "Item")} × ${l.qty}</span>
+          <span>${p ? money(p.price_cents * l.qty) : ""}</span></div>`;
+}).join("");
 
 function renderHold() {
   const el = $("#hold");
   if (!hold) { el.classList.add("hidden"); return; }
   el.classList.remove("hidden");
-  const p = products.find((x) => x.id === hold.product_id);
-  $("#holdItem").textContent = p ? `${p.image_emoji} ${p.name}` : "Your item";
-  $("#holdStatus").textContent = order ? `Order ${money(order.amount_cents)}. Awaiting payment.` : "Not checked out yet.";
+  $("#holdStatus").textContent = order ? "Order created. Awaiting payment." : "Not checked out yet.";
+  $("#holdLines").innerHTML = linesHtml(hold.items);
+  $("#holdTotal").textContent = money(order ? order.amount_cents : linesTotal(hold.items));
   $("#holdActions").innerHTML = order
     ? `<button class="buy" data-h="pay">Pay now</button>
        <button class="danger" data-h="decline">Simulate declined card</button>
@@ -316,11 +420,10 @@ $("#holdActions").addEventListener("click", async (e) => {
   const r = await api(`/api/dev/payments/${order.id}/simulate?outcome=${outcome}`, { method: "POST" });
   const d = await r.json();
   if (d.order_status === "paid") {
-    const p = products.find((x) => x.id === hold.product_id);
-    $("#done").innerHTML = `<div class="row"><div><div class="sub">Order confirmed ✓</div>
-      <div class="name">${esc(p ? p.image_emoji + " " + p.name : "Your item")} · ${money(order.amount_cents)}</div>
-      <div class="sub">A confirmation email is queued (outbox → email consumer).</div></div>
-      <button class="ghost" id="dismiss">Dismiss</button></div>`;
+    $("#done").innerHTML = `<div class="row"><div class="sub">Order confirmed ✓ A confirmation email is queued (outbox → email consumer).</div>
+      <button class="ghost" id="dismiss">Dismiss</button></div>
+      <div class="lines">${linesHtml(hold.items)}</div>
+      <div class="total"><span>Paid</span><span>${money(order.amount_cents)}</span></div>`;
     $("#done").classList.remove("hidden");
     $("#dismiss").onclick = () => $("#done").classList.add("hidden");
     setHold(null, null); load();
@@ -345,8 +448,11 @@ function tick() {
 // ------------------------------------------------------------------ boot
 function start() {
   show();
-  hold = JSON.parse(localStorage.getItem("hold") || "null");
-  order = JSON.parse(localStorage.getItem("order") || "null");
+  cart = readJSON("cart", {});
+  hold = readJSON("hold", null);
+  order = readJSON("order", null);
+  // Discard a hold saved by an older single-product version of this page.
+  if (hold && !Array.isArray(hold.items)) { hold = null; order = null; localStorage.removeItem("hold"); localStorage.removeItem("order"); }
   connectStream(); load(); renderQueue(); renderHold();
   clearInterval(pollTimer);
   pollTimer = setInterval(load, 1500);

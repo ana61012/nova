@@ -3,8 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    JSON, CheckConstraint, DateTime, Enum, ForeignKey, Index, Integer, String,
-    UniqueConstraint, text,
+    JSON, CheckConstraint, DateTime, Enum, ForeignKey, Integer, String, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -72,29 +71,48 @@ class ReservationStatus(str, enum.Enum):
 
 
 class Reservation(Base):
+    """A cart hold: one or more ReservationItem lines that live and die together."""
     __tablename__ = "reservations"
-    _live = text("status IN ('ACTIVE','CONVERTED')")
     __table_args__ = (
         # Same user + same key = same reservation. This is the idempotency guarantee.
         UniqueConstraint("user_id", "idempotency_key", name="uq_user_idem"),
-        # One purchase per customer per product, enforced by the database so
-        # concurrent requests with different keys cannot both slip through.
-        Index(
-            "uq_one_purchase_per_product", "user_id", "product_id", unique=True,
-            sqlite_where=_live, postgresql_where=_live,
-        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True)
     user_id: Mapped[str] = mapped_column(String(64), index=True)
-    qty: Mapped[int] = mapped_column(Integer)
     status: Mapped[ReservationStatus] = mapped_column(
         Enum(ReservationStatus), default=ReservationStatus.ACTIVE, index=True
     )
     idempotency_key: Mapped[str] = mapped_column(String(64))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ReservationItem(Base):
+    __tablename__ = "reservation_items"
+    __table_args__ = (
+        UniqueConstraint("reservation_id", "product_id", name="uq_reservation_product"),
+        CheckConstraint("qty >= 1", name="ck_item_qty_positive"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    reservation_id: Mapped[str] = mapped_column(ForeignKey("reservations.id"), index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True)
+    qty: Mapped[int] = mapped_column(Integer)
+
+
+class CustomerQuota(Base):
+    """Units of a product a customer currently holds or has bought.
+
+    Capped per customer with the same trick as stock: a conditional UPDATE, so the
+    cap holds even when one person fires many carts at once.
+    """
+    __tablename__ = "customer_quota"
+    __table_args__ = (CheckConstraint("qty >= 0", name="ck_quota_nonneg"),)
+
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), primary_key=True)
+    qty: Mapped[int] = mapped_column(Integer, default=0)
 
 
 # ---------------------------------------------------------------- waiting room
@@ -138,8 +156,6 @@ class Order(Base):
     user_id: Mapped[str] = mapped_column(String(64), index=True)
     # unique: one order per reservation, which makes order creation idempotent.
     reservation_id: Mapped[str] = mapped_column(ForeignKey("reservations.id"), unique=True)
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
-    qty: Mapped[int] = mapped_column(Integer)
     amount_cents: Mapped[int] = mapped_column(Integer)
     status: Mapped[OrderStatus] = mapped_column(
         Enum(OrderStatus), default=OrderStatus.PENDING_PAYMENT, index=True
@@ -147,6 +163,18 @@ class Order(Base):
     payment_intent_id: Mapped[str] = mapped_column(String(64), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class OrderItem(Base):
+    """One line of an order, with the price frozen at the time the order was made."""
+    __tablename__ = "order_items"
+    __table_args__ = (UniqueConstraint("order_id", "product_id", name="uq_order_product"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("orders.id"), index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
+    qty: Mapped[int] = mapped_column(Integer)
+    unit_price_cents: Mapped[int] = mapped_column(Integer)
 
 
 class WebhookEvent(Base):

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 
 class ProductOut(BaseModel):
@@ -12,27 +12,39 @@ class ProductOut(BaseModel):
     available: int
 
 
+class LimitsOut(BaseModel):
+    max_qty_per_product: int
+    max_cart_lines: int
+
+
 class DropOut(BaseModel):
     id: int
     name: str
     starts_at: datetime
+    limits: LimitsOut
     products: list[ProductOut]
 
 
-class ReserveIn(BaseModel):
+class CartLine(BaseModel):
     product_id: int
-    qty: int = Field(1, ge=1)
+    qty: int = Field(ge=1, le=1000)  # the real per-customer cap is enforced server-side
+
+
+class ReserveIn(BaseModel):
+    items: list[CartLine] = Field(min_length=1, max_length=50)
+
+
+class LineOut(BaseModel):
+    product_id: int
+    qty: int
 
 
 class ReservationOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
     id: str
-    product_id: int
     user_id: str
-    qty: int
     status: str
     expires_at: datetime
+    items: list[LineOut]
 
 
 class Credentials(BaseModel):
@@ -50,13 +62,16 @@ class OrderIn(BaseModel):
     reservation_id: str
 
 
-class OrderOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    reservation_id: str
+class OrderItemOut(BaseModel):
     product_id: int
     qty: int
+    unit_price_cents: int
+
+
+class OrderOut(BaseModel):
+    id: str
+    reservation_id: str
     amount_cents: int
     status: str
     payment_intent_id: str
+    items: list[OrderItemOut]

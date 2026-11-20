@@ -164,6 +164,7 @@ async def status_payload(session: AsyncSession, drop_id: int, user_id: str) -> d
                 select(func.count()).select_from(QueueEntry).where(
                     QueueEntry.drop_id == drop_id, QueueEntry.status == QueueStatus.WAITING,
                     QueueEntry.id < entry.id,
+                    
                 )
             )
         ).scalar_one()

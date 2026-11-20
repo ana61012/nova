@@ -17,52 +17,66 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..models import (
-    Notification, Order, OutboxEvent, ProcessedEvent, SalesStat,
+    Notification, Order, OrderItem, OutboxEvent, ProcessedEvent, SalesStat,
 )
 
 Event = Any  # anything with .id, .topic, .payload
 Consumer = Callable[[AsyncSession, Event], Awaitable[None]]
 
 
-def order_payload(order: Order, **extra) -> dict:
-    return {
-        "order_id": order.id, "user_id": order.user_id, "product_id": order.product_id,
-        "qty": order.qty, "amount_cents": order.amount_cents, **extra,
-    }
-
-
 async def emit(session: AsyncSession, topic: str, payload: dict) -> None:
     session.add(OutboxEvent(topic=topic, payload=payload))
+
+
+async def emit_order(session: AsyncSession, topic: str, order: Order, **extra) -> None:
+    """Emit an order event whose payload lists every line, so consumers need no lookups."""
+    rows = (
+        await session.execute(
+            select(OrderItem.product_id, OrderItem.qty, OrderItem.unit_price_cents)
+            .where(OrderItem.order_id == order.id)
+            .order_by(OrderItem.product_id)
+        )
+    ).all()
+    await emit(session, topic, {
+        "order_id": order.id,
+        "user_id": order.user_id,
+        "amount_cents": order.amount_cents,
+        "items": [{"product_id": p, "qty": q, "unit_price_cents": c} for p, q, c in rows],
+        **extra,
+    })
 
 
 # ---------------------------------------------------------------- consumers
 
 _EMAIL = {
     "order.paid": "Your order is confirmed. Thanks for copping!",
-    "order.expired": "Your reservation expired and the item went back on sale.",
+    "order.expired": "Your reservation expired and the items went back on sale.",
     "order.refunded": "Your order was refunded.",
 }
 
 
-async def email_consumer(session: AsyncSession, ev: OutboxEvent) -> None:
+async def email_consumer(session: AsyncSession, ev: Event) -> None:
     session.add(Notification(user_id=ev.payload["user_id"], kind=ev.topic, body=_EMAIL[ev.topic]))
 
 
-async def analytics_consumer(session: AsyncSession, ev: OutboxEvent) -> None:
+async def analytics_consumer(session: AsyncSession, ev: Event) -> None:
+    if ev.topic == "order.refunded" and not ev.payload.get("was_paid"):
+        return  # refunded before it was ever counted as a sale (late payment, items gone)
     sign = {"order.paid": 1, "order.refunded": -1}[ev.topic]
-    p = ev.payload
-    bumped = await session.execute(
-        update(SalesStat).where(SalesStat.product_id == p["product_id"]).values(
-            orders=SalesStat.orders + sign,
-            units=SalesStat.units + sign * p["qty"],
-            revenue_cents=SalesStat.revenue_cents + sign * p["amount_cents"],
+    for it in ev.payload["items"]:
+        units = sign * it["qty"]
+        revenue = units * it["unit_price_cents"]
+        bumped = await session.execute(
+            update(SalesStat).where(SalesStat.product_id == it["product_id"]).values(
+                orders=SalesStat.orders + sign,
+                units=SalesStat.units + units,
+                revenue_cents=SalesStat.revenue_cents + revenue,
+            )
         )
-    )
-    if bumped.rowcount == 0:
-        session.add(SalesStat(
-            product_id=p["product_id"], orders=sign, units=sign * p["qty"],
-            revenue_cents=sign * p["amount_cents"],
-        ))
+        if bumped.rowcount == 0:
+            session.add(SalesStat(
+                product_id=it["product_id"], orders=sign, units=units, revenue_cents=revenue,
+            ))
 
 
 # topic -> [(consumer name, handler)]
@@ -75,7 +89,7 @@ CONSUMERS: dict[str, list[tuple[str, Consumer]]] = {
 
 # ---------------------------------------------------------------- relay
 
-async def _deliver(session: AsyncSession, name: str, handler: Consumer, ev: OutboxEvent) -> None:
+async def _deliver(session: AsyncSession, name: str, handler: Consumer, ev: Event) -> None:
     """Run one consumer for one event, at most once (processed_events is the guard)."""
     session.add(ProcessedEvent(consumer=name, event_id=ev.id))
     try:

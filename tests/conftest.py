@@ -80,16 +80,18 @@ async def signup(api, name: str) -> dict:
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
-async def reserve(api, headers, product_id=1, key=None):
+async def reserve(api, headers, product_id=1, key=None, qty=1, items=None):
+    """Reserve one product (default) or a whole cart via `items=[{"product_id":..,"qty":..}]`."""
+    items = items if items is not None else [{"product_id": product_id, "qty": qty}]
     return await api.post(
-        "/api/reservations", json={"product_id": product_id, "qty": 1},
+        "/api/reservations", json={"items": items},
         headers={**headers, "Idempotency-Key": key or f"key-{os.urandom(4).hex()}-abcd"},
     )
 
 
-async def buy_to_order(api, headers, product_id=1) -> dict:
+async def buy_to_order(api, headers, product_id=1, qty=1, items=None) -> dict:
     """Reserve and create an order; returns the order JSON."""
-    res = await reserve(api, headers, product_id)
+    res = await reserve(api, headers, product_id, qty=qty, items=items)
     assert res.status_code == 201, res.text
     order = await api.post("/api/orders", json={"reservation_id": res.json()["id"]}, headers=headers)
     assert order.status_code == 201, order.text

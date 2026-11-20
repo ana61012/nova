@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db import get_session
 from ..models import (
     Drop, Inventory, Order, OrderStatus, OutboxEvent, Product, QueueEntry, Reservation,
-    ReservationStatus, SalesStat,
+    ReservationItem, ReservationStatus, SalesStat,
 )
 from ..services import queue
 
@@ -26,8 +26,9 @@ async def stats(session: AsyncSession = Depends(get_session)):
         (pid, st): qty
         for pid, st, qty in (
             await session.execute(
-                select(Reservation.product_id, Reservation.status, func.sum(Reservation.qty))
-                .group_by(Reservation.product_id, Reservation.status)
+                select(ReservationItem.product_id, Reservation.status, func.sum(ReservationItem.qty))
+                .join(Reservation, Reservation.id == ReservationItem.reservation_id)
+                .group_by(ReservationItem.product_id, Reservation.status)
             )
         ).all()
     }

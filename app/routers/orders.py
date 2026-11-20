@@ -10,7 +10,7 @@ from ..db import get_session
 from ..metrics import WEBHOOKS
 from ..models import Order
 from ..ratelimit import rate_limit
-from ..schemas import OrderIn, OrderOut
+from ..schemas import OrderIn, OrderItemOut, OrderOut
 from ..security import current_user
 from ..services import orders as svc
 
@@ -28,6 +28,21 @@ async def _own_order(session: AsyncSession, order_id: str, user_id: str) -> Orde
     return order
 
 
+async def _order_out(session: AsyncSession, order: Order) -> OrderOut:
+    items = await svc.order_items(session, order.id)
+    return OrderOut(
+        id=order.id,
+        reservation_id=order.reservation_id,
+        amount_cents=order.amount_cents,
+        status=order.status.value,
+        payment_intent_id=order.payment_intent_id,
+        items=[
+            OrderItemOut(product_id=i.product_id, qty=i.qty, unit_price_cents=i.unit_price_cents)
+            for i in items
+        ],
+    )
+
+
 @router.post("/api/orders", response_model=OrderOut, status_code=201)
 async def create_order(
     body: OrderIn,
@@ -36,16 +51,17 @@ async def create_order(
     session: AsyncSession = Depends(get_session),
 ):
     try:
-        return await svc.create_order(session, user_id=user_id, reservation_id=body.reservation_id)
+        order = await svc.create_order(session, user_id=user_id, reservation_id=body.reservation_id)
     except svc.ReservationInvalid:
         raise HTTPException(409, "Reservation is missing, expired or not yours")
+    return await _order_out(session, order)
 
 
 @router.get("/api/orders/{order_id}", response_model=OrderOut)
 async def get_order(
     order_id: str, user_id: str = Depends(current_user), session: AsyncSession = Depends(get_session)
 ):
-    return await _own_order(session, order_id, user_id)
+    return await _order_out(session, await _own_order(session, order_id, user_id))
 
 
 @router.post("/webhooks/payments")

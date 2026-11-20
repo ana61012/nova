@@ -2,9 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import settings
 from ..db import get_session
 from ..models import Drop, Inventory, Product
-from ..schemas import DropOut, ProductOut
+from ..schemas import DropOut, LimitsOut, ProductOut
 
 router = APIRouter(prefix="/api/drops", tags=["drops"])
 
@@ -27,6 +28,10 @@ async def current_drop(session: AsyncSession = Depends(get_session)):
         id=drop.id,
         name=drop.name,
         starts_at=drop.starts_at,
+        limits=LimitsOut(
+            max_qty_per_product=settings.max_qty_per_product,
+            max_cart_lines=settings.max_cart_lines,
+        ),
         products=[
             ProductOut(
                 id=p.id, name=p.name, price_cents=p.price_cents, image_emoji=p.image_emoji,

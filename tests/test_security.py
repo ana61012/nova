@@ -40,7 +40,7 @@ async def test_rate_limit_returns_429_with_retry_after(api, monkeypatch):
     monkeypatch.setattr(ratelimit, "user_limiter", TokenBucket(3, 0.001))
     h = await signup(api, "spammer")
     codes = [(await reserve(api, h)).status_code for _ in range(5)]
-    assert codes[:3] == [201, 409, 409]  # allowed through (then one-per-customer kicks in)
+    assert codes[:3] == [201, 201, 201]  # the first three get through (the cap of 3 is not hit yet)
     assert codes[3:] == [429, 429]
     blocked = await reserve(api, h)
     assert blocked.headers["Retry-After"].isdigit()

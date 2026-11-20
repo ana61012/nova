@@ -3,7 +3,7 @@ from datetime import timedelta
 
 from sqlalchemy import func, select, update
 
-from app.models import Inventory, Reservation, ReservationStatus, utcnow
+from app.models import CustomerQuota, Inventory, Reservation, ReservationItem, ReservationStatus, utcnow
 from app.services import inventory
 
 
@@ -11,12 +11,14 @@ async def _try_reserve(sessions, product_id, user, key=None, qty=1, ttl=120):
     async with sessions() as s:
         try:
             r, created = await inventory.reserve(
-                s, product_id=product_id, user_id=user, qty=qty,
+                s, user_id=user, items=[(product_id, qty)],
                 idempotency_key=key or f"key-{user}-0001", ttl_seconds=ttl,
             )
             return ("ok", r, created)
         except inventory.SoldOut:
             return ("sold_out", None, False)
+        except inventory.LimitExceeded:
+            return ("limit", None, False)
 
 
 async def _available(sessions, product_id):
@@ -35,7 +37,7 @@ async def test_no_oversell_under_concurrency(sessions, product_id):
     assert await _available(sessions, product_id) == 0
 
     async with sessions() as s:
-        held = (await s.execute(select(func.sum(Reservation.qty)))).scalar()
+        held = (await s.execute(select(func.sum(ReservationItem.qty)))).scalar()
     assert held == 10  # reservations and stock always agree
 
 
@@ -56,6 +58,24 @@ async def test_simultaneous_double_click_creates_one_reservation(sessions, produ
     assert await _available(sessions, product_id) == 9
 
 
+async def test_simultaneous_duplicate_never_reports_sold_out(sessions, product_id):
+    """One unit left and 20 identical requests at once: all get the SAME reservation.
+
+    Without the re-check after a failed take, the losers of the race would see
+    "sold out" for a purchase that actually succeeded.
+    """
+    async with sessions() as s:
+        await s.execute(update(Inventory).values(available=1))
+        await s.commit()
+    results = await asyncio.gather(
+        *[_try_reserve(sessions, product_id, "zed", key="zed-click-1") for _ in range(20)]
+    )
+    assert {r[0] for r in results} == {"ok"}
+    assert len({r[1].id for r in results}) == 1
+    assert sum(1 for r in results if r[2]) == 1
+    assert await _available(sessions, product_id) == 0
+
+
 async def test_expired_holds_return_stock_exactly_once(sessions, product_id):
     for i in range(3):
         await _try_reserve(sessions, product_id, f"u{i}", ttl=60)
@@ -74,6 +94,8 @@ async def test_expired_holds_return_stock_exactly_once(sessions, product_id):
     counts = await asyncio.gather(sweep(), sweep(), sweep())
     assert sum(counts) == 3
     assert await _available(sessions, product_id) == 10
+    async with sessions() as s:  # the per-customer quota came back too
+        assert (await s.execute(select(func.sum(CustomerQuota.qty)))).scalar() == 0
 
 
 async def test_cancel_returns_stock_once(sessions, product_id):

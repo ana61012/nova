@@ -67,11 +67,13 @@ async def test_cannot_order_someone_elses_reservation(api):
     assert stolen.status_code == 409
 
 
-async def test_one_per_customer_even_with_different_keys(api):
+async def test_customer_cap_holds_even_with_different_keys(api):
     h = await signup(api, "greedy")
-    assert (await reserve(api, h)).status_code == 201
-    assert (await reserve(api, h)).status_code == 409
-    assert (await stock(api))["available"] == 9  # the failed attempt did not leak stock
+    for _ in range(3):  # the default cap is 3 per product
+        assert (await reserve(api, h)).status_code == 201
+    over = await reserve(api, h)
+    assert over.status_code == 409 and "Limit" in over.json()["detail"]
+    assert (await stock(api))["available"] == 7  # the refused attempt did not leak stock
 
 
 async def test_duplicate_webhook_event_is_applied_once(api):
