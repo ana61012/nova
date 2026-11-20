@@ -10,7 +10,8 @@ import httpx  # noqa: E402
 import pytest_asyncio  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker  # noqa: E402
 
-from app import ratelimit  # noqa: E402
+from app import ratelimit
+from app import db as db_mod  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.db import Base, engine, init_db, make_engine  # noqa: E402
 from app.models import Drop, Inventory, Product, utcnow  # noqa: E402
@@ -61,19 +62,32 @@ async def api(monkeypatch):
     monkeypatch.setattr(settings, "queue_required", False)
     monkeypatch.setattr(settings, "rate_limit_enabled", False)
     monkeypatch.setattr(mailer_mod, "mailer", mailer_mod.MemoryMailer())  # capture "emails" in memory
-    await engine.dispose()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
-    await seed_if_empty()
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client
-    await engine.dispose()
-    ratelimit.user_limiter = ratelimit.TokenBucket(settings.rl_user_capacity, settings.rl_user_refill_per_sec)
-    ratelimit.ip_limiter = ratelimit.TokenBucket(settings.rl_ip_capacity, settings.rl_ip_refill_per_sec)
-    ratelimit.auth_ip_limiter = ratelimit.TokenBucket(settings.rl_auth_capacity, settings.rl_auth_refill_per_sec)
 
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    test_engine = make_engine(f"sqlite+aiosqlite:///{path}", poolclass=NullPool)
+    orig_engine = db_mod.engine
+    db_mod.engine = test_engine
+    db_mod.SessionLocal.configure(bind=test_engine)
+
+    try:
+        await init_db(test_engine)
+        await seed_if_empty()
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            yield client
+    finally:
+        await test_engine.dispose()
+        db_mod.engine = orig_engine
+        db_mod.SessionLocal.configure(bind=orig_engine)
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(path + suffix)
+            except FileNotFoundError:
+                pass
+        ratelimit.user_limiter = ratelimit.TokenBucket(settings.rl_user_capacity, settings.rl_user_refill_per_sec)
+        ratelimit.ip_limiter = ratelimit.TokenBucket(settings.rl_ip_capacity, settings.rl_ip_refill_per_sec)
+        ratelimit.auth_ip_limiter = ratelimit.TokenBucket(settings.rl_auth_capacity, settings.rl_auth_refill_per_sec)
 
 # ---- helpers shared by API tests -------------------------------------------
 

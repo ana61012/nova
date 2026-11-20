@@ -9,11 +9,13 @@ class Base(DeclarativeBase):
     pass
 
 
-def make_engine(url: str):
+def make_engine(url: str, poolclass=None):
     kwargs = {}
     if url.startswith("sqlite"):
         # Wait for the write lock instead of failing under concurrent writers.
         kwargs["connect_args"] = {"timeout": 30}
+    if poolclass is not None:
+        kwargs["poolclass"] = poolclass
     eng = create_async_engine(url, **kwargs)
     if url.startswith("sqlite"):
         @event.listens_for(eng.sync_engine, "connect")
