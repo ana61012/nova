@@ -105,13 +105,24 @@
   <!-- sign in -->
   <form class="auth hidden" id="auth">
     <h2>Join the drop</h2>
-    <input id="authEmail" type="email" placeholder="Email" autocomplete="email" required>
-    <input id="authPass" type="password" placeholder="Password (8+ characters)" minlength="8" autocomplete="current-password" required>
-    <div class="err" id="authErr"></div>
-    <div class="row">
-      <button class="buy" type="submit" data-mode="signup" style="flex:1">Create account</button>
-      <button class="ghost" type="submit" data-mode="login" style="flex:1">Log in</button>
+    <!-- step 1: email -->
+    <div id="stepEmail">
+      <input id="authEmail" type="email" placeholder="Email" autocomplete="email">
+      <div class="sub" style="margin:8px 0 12px">No password. We'll email you a 6-digit code.</div>
+      <button class="buy" type="submit" style="width:100%" id="sendBtn">Send me a code</button>
     </div>
+    <!-- step 2: code -->
+    <div id="stepCode" class="hidden">
+      <div class="sub" style="margin-bottom:10px">Enter the code we sent to <b id="sentTo"></b>.</div>
+      <input id="authCode" inputmode="numeric" pattern="\d{6}" maxlength="6" placeholder="123456"
+             autocomplete="one-time-code" style="letter-spacing:6px;text-align:center;font-size:20px">
+      <button class="buy" type="submit" style="width:100%;margin-top:12px" id="verifyBtn">Verify and continue</button>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost" type="button" id="resendBtn" style="flex:1" disabled>Resend code</button>
+        <button class="ghost" type="button" id="changeEmail" style="flex:1">Change email</button>
+      </div>
+    </div>
+    <div class="err" id="authErr"></div>
   </form>
 
   <!-- shop -->
@@ -181,20 +192,64 @@ const productOf = (id) => products.find((p) => p.id === Number(id));
 const linesTotal = (lines) => lines.reduce((sum, l) => sum + (productOf(l.product_id)?.price_cents || 0) * l.qty, 0);
 
 // ------------------------------------------------------------------ auth
+let pendingEmail = null, resendTimer = null;
+
+function authStep(step) {
+  $("#stepEmail").classList.toggle("hidden", step !== "email");
+  $("#stepCode").classList.toggle("hidden", step !== "code");
+  $("#authErr").textContent = "";
+  if (step === "code") { $("#sentTo").textContent = pendingEmail; $("#authCode").value = ""; $("#authCode").focus(); }
+}
+
+function startResendCountdown(seconds) {
+  clearInterval(resendTimer);
+  const btn = $("#resendBtn");
+  let left = seconds;
+  const tick = () => {
+    btn.disabled = left > 0;
+    btn.textContent = left > 0 ? `Resend in ${left}s` : "Resend code";
+    left -= 1;
+    if (left < -1) clearInterval(resendTimer);
+  };
+  tick(); resendTimer = setInterval(tick, 1000);
+}
+
+async function sendCode() {
+  $("#authErr").textContent = "";
+  const r = await api("/api/auth/request-code", { method: "POST", body: JSON.stringify({ email: pendingEmail }) });
+  if (r.status === 429) {
+    const wait = Number(r.headers.get("Retry-After")) || 60;
+    // Already have a live code? Let them type it while the resend timer runs.
+    authStep("code"); startResendCountdown(wait);
+    $("#authErr").textContent = (await detail(r)) || "Please wait a moment.";
+    return;
+  }
+  if (!r.ok) { $("#authErr").textContent = (await detail(r)) || "Could not send a code."; return; }
+  const d = await r.json();
+  authStep("code"); startResendCountdown(d.resend_after);
+}
+
 document.querySelector("#auth").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const mode = e.submitter?.dataset.mode || "login";
+  if (!pendingEmail || !$("#stepEmail").classList.contains("hidden")) {
+    pendingEmail = $("#authEmail").value.trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(pendingEmail)) { pendingEmail = null; $("#authErr").textContent = "Enter a valid email address."; return; }
+    return sendCode();
+  }
   $("#authErr").textContent = "";
-  const r = await api("/api/auth/" + mode, {
+  const r = await api("/api/auth/verify-code", {
     method: "POST",
-    body: JSON.stringify({ email: $("#authEmail").value.trim(), password: $("#authPass").value }),
+    body: JSON.stringify({ email: pendingEmail, code: $("#authCode").value.trim() }),
   });
   if (!r.ok) { $("#authErr").textContent = (await detail(r)) || "Could not sign in."; return; }
   const d = await r.json();
   session = { token: d.token, email: d.email };
   localStorage.setItem("session", JSON.stringify(session));
+  clearInterval(resendTimer); pendingEmail = null; authStep("email");
   start();
 });
+$("#resendBtn").addEventListener("click", sendCode);
+$("#changeEmail").addEventListener("click", () => { clearInterval(resendTimer); pendingEmail = null; authStep("email"); });
 
 function logout() {
   session = null; hold = null; order = null; cart = {}; queue = { state: "none" };

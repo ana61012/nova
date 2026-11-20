@@ -1,6 +1,5 @@
 import hashlib
 import hmac
-import os
 import time
 
 import jwt
@@ -8,21 +7,12 @@ from fastapi import Header, HTTPException
 
 from .config import settings
 
-# scrypt parameters are deliberately modest so demos and tests stay quick.
-# Raise n (to 2**15 or more) for anything real.
-_SCRYPT = dict(n=2**12, r=8, p=1)
-
-
-def hash_password(password: str) -> str:
-    salt = os.urandom(16)
-    dk = hashlib.scrypt(password.encode(), salt=salt, **_SCRYPT)
-    return f"{salt.hex()}${dk.hex()}"
-
-
-def verify_password(password: str, stored: str) -> bool:
-    salt_hex, dk_hex = stored.split("$")
-    dk = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt_hex), **_SCRYPT)
-    return hmac.compare_digest(dk.hex(), dk_hex)
+def hash_code(email: str, code: str) -> str:
+    """Keyed hash of a sign-in code. A 6-digit code is trivially brute-forced if the
+    table leaks, so the server secret is what protects it, together with the short
+    expiry and attempt cap. The "otp:" prefix keeps this use of the key separate from
+    JWT signing."""
+    return hmac.new(settings.jwt_secret.encode(), f"otp:{email}:{code}".encode(), hashlib.sha256).hexdigest()
 
 
 def create_token(user_id: str) -> str:

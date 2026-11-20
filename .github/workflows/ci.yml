@@ -29,6 +29,7 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Start server
         env:
+          DROP_EMAIL_BACKEND: memory
           DROP_RATE_LIMIT_ENABLED: "false"
           DROP_QUEUE_BATCH_SIZE: "25"
           DROP_QUEUE_INTERVAL_SECONDS: "0.5"

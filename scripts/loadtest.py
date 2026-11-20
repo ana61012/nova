@@ -9,7 +9,7 @@ numbers are compared with what the clients say they paid for.
 Run against a FRESH server so the stock numbers start clean. Rate limiting
 should be off for the server, because every simulated shopper shares one IP:
 
-    DROP_RATE_LIMIT_ENABLED=false DROP_QUEUE_BATCH_SIZE=25 DROP_QUEUE_INTERVAL_SECONDS=0.5 \\
+    DROP_EMAIL_BACKEND=memory DROP_RATE_LIMIT_ENABLED=false DROP_QUEUE_BATCH_SIZE=25 DROP_QUEUE_INTERVAL_SECONDS=0.5 \\
     DROP_QUEUE_MAX_ACTIVE=50 DROP_QUEUE_ADMIT_WINDOW_SECONDS=30 \\
         uvicorn app.main:app --port 8000 --timeout-keep-alive 30
     python scripts/loadtest.py --users 300
@@ -60,7 +60,11 @@ def build_cart(i: int, args, others: list[int]) -> dict[int, int]:
 
 async def shopper(i: int, client: httpx.AsyncClient, args, run: str, gate: asyncio.Event, out: dict, others):
     email = f"load-{run}-{i}@example.com"
-    r = await client.post("/api/auth/signup", json={"email": email, "password": "password123"})
+    sent = await call(client, out, "POST", "/api/auth/request-code", json={"email": email})
+    assert sent.status_code == 202, sent.text
+    box = await call(client, out, "GET", "/api/auth/dev/mailbox", params={"email": email})
+    assert box.status_code == 200, "start the server with DROP_EMAIL_BACKEND=memory"
+    r = await client.post("/api/auth/verify-code", json={"email": email, "code": box.json()["code"]})
     r.raise_for_status()
     h = {"Authorization": f"Bearer {r.json()['token']}"}
     out["signed_up"] += 1

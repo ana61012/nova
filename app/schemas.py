@@ -47,9 +47,18 @@ class ReservationOut(BaseModel):
     items: list[LineOut]
 
 
-class Credentials(BaseModel):
+class EmailIn(BaseModel):
     email: str = Field(min_length=3, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-    password: str = Field(min_length=8, max_length=128)
+
+
+class VerifyIn(EmailIn):
+    code: str = Field(pattern=r"^\d{6}$")
+
+
+class CodeSentOut(BaseModel):
+    detail: str
+    expires_in: int
+    resend_after: int
 
 
 class TokenOut(BaseModel):

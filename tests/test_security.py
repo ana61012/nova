@@ -5,19 +5,6 @@ from app.ratelimit import TokenBucket
 from .conftest import reserve, signup
 
 
-async def test_signup_login_flow(api):
-    r = await api.post("/api/auth/signup", json={"email": "Ann@Example.com", "password": "password123"})
-    assert r.status_code == 201
-    assert (await api.post("/api/auth/signup", json={"email": "ann@example.com", "password": "password123"})).status_code == 409
-
-    ok = await api.post("/api/auth/login", json={"email": "ann@example.com", "password": "password123"})
-    assert ok.status_code == 200 and ok.json()["token"]
-    bad = await api.post("/api/auth/login", json={"email": "ann@example.com", "password": "wrong-password"})
-    ghost = await api.post("/api/auth/login", json={"email": "nobody@example.com", "password": "password123"})
-    assert bad.status_code == ghost.status_code == 401
-    assert bad.json() == ghost.json()  # cannot tell "no such user" from "wrong password"
-
-
 async def test_protected_routes_need_a_valid_token(api):
     assert (await api.post("/api/queue/join")).status_code == 401
     assert (await api.post("/api/queue/join", headers={"Authorization": "Bearer nonsense"})).status_code == 401

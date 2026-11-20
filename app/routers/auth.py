@@ -1,39 +1,59 @@
-import asyncio
+"""Passwordless sign-in: email a one-time code, exchange it for a JWT.
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+    POST /api/auth/request-code  {email}        -> 202 (always, whether or not the address is known)
+    POST /api/auth/verify-code   {email, code}  -> 200 {token, user_id, email}
+
+There is no separate signup: the first successful verification creates the account.
+"""
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import settings
 from ..db import get_session
-from ..models import User
-from ..schemas import Credentials, TokenOut
-from ..security import create_token, hash_password, verify_password
+from ..ratelimit import limit_auth
+from ..schemas import CodeSentOut, EmailIn, TokenOut, VerifyIn
+from ..security import create_token
+from ..services import mailer, otp
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
-@router.post("/signup", response_model=TokenOut, status_code=201)
-async def signup(body: Credentials, session: AsyncSession = Depends(get_session)):
+@router.post("/request-code", response_model=CodeSentOut, status_code=202)
+async def request_code(body: EmailIn, request: Request, session: AsyncSession = Depends(get_session)):
+    limit_auth(request)
     email = body.email.lower()
-    # scrypt is CPU-heavy: run it in a thread so it cannot stall the event loop.
-    pw_hash = await asyncio.to_thread(hash_password, body.password)
-    user = User(email=email, password_hash=pw_hash)
-    session.add(user)
     try:
-        await session.commit()
-    except IntegrityError:
-        await session.rollback()
-        raise HTTPException(409, "Email already registered")
-    return TokenOut(token=create_token(user.id), user_id=user.id, email=email)
+        code = await otp.issue_code(session, email)
+    except otp.Cooldown as c:
+        raise HTTPException(429, "Please wait before asking for another code",
+                            headers={"Retry-After": str(c.retry_after)})
+    try:
+        await mailer.mailer.send_code(email, code, settings.otp_ttl_seconds // 60)
+    except Exception as exc:  # never tell the caller whether delivery worked for this address
+        print(f"mail error for {email}: {exc!r}", flush=True)
+    return CodeSentOut(
+        detail="If that address can receive email, a code is on its way.",
+        expires_in=settings.otp_ttl_seconds, resend_after=settings.otp_resend_cooldown_seconds,
+    )
 
 
-@router.post("/login", response_model=TokenOut)
-async def login(body: Credentials, session: AsyncSession = Depends(get_session)):
+@router.post("/verify-code", response_model=TokenOut)
+async def verify_code(body: VerifyIn, request: Request, session: AsyncSession = Depends(get_session)):
+    limit_auth(request)
     email = body.email.lower()
-    user = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
-    # Same error for "no such user" and "wrong password" so emails cannot be probed.
-    ok = user is not None and await asyncio.to_thread(verify_password, body.password, user.password_hash)
-    if not ok:
-        raise HTTPException(401, "Invalid email or password")
+    user = await otp.verify_code(session, email, body.code)
+    # One message for wrong, expired, used, locked-out and unknown-address alike.
+    if user is None:
+        raise HTTPException(401, "Invalid or expired code")
     return TokenOut(token=create_token(user.id), user_id=user.id, email=email)
+
+
+if settings.dev_mode and settings.email_backend.lower() == "memory":
+    # Lets the load test and demos read the 'email' without an inbox. It exists only
+    # when BOTH dev mode and the in-memory mailer are on.
+    @router.get("/dev/mailbox", include_in_schema=False)
+    async def dev_mailbox(email: str):
+        code = getattr(mailer.mailer, "latest", {}).get(email.lower())
+        if code is None:
+            raise HTTPException(404, "No code sent to that address")
+        return {"email": email.lower(), "code": code}

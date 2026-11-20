@@ -42,6 +42,23 @@ user_limiter: RateLimiter = TokenBucket(settings.rl_user_capacity, settings.rl_u
 ip_limiter: RateLimiter = TokenBucket(settings.rl_ip_capacity, settings.rl_ip_refill_per_sec)
 
 
+auth_ip_limiter: RateLimiter = TokenBucket(settings.rl_auth_capacity, settings.rl_auth_refill_per_sec)
+
+
+def limit_auth(request: Request) -> None:
+    """Per-IP limit for the unauthenticated sign-in endpoints (they send email and
+    take guesses, so they get a much tighter bucket than the shop endpoints)."""
+    if not settings.rate_limit_enabled:
+        return
+    ip = request.client.host if request.client else "unknown"
+    allowed, retry_after = auth_ip_limiter.allow(f"auth:{ip}")
+    if not allowed:
+        raise HTTPException(
+            429, "Too many attempts, slow down",
+            headers={"Retry-After": str(max(1, math.ceil(retry_after)))},
+        )
+
+
 async def rate_limit(request: Request, user_id: str = Depends(current_user)) -> None:
     """Dependency for the hot endpoints: per-IP and per-user limits."""
     if not settings.rate_limit_enabled:

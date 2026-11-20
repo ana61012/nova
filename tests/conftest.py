@@ -14,6 +14,7 @@ from app import ratelimit  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.db import Base, engine, init_db, make_engine  # noqa: E402
 from app.models import Drop, Inventory, Product, utcnow  # noqa: E402
+from app.services import mailer as mailer_mod  # noqa: E402
 
 
 @pytest_asyncio.fixture
@@ -59,6 +60,7 @@ async def api(monkeypatch):
 
     monkeypatch.setattr(settings, "queue_required", False)
     monkeypatch.setattr(settings, "rate_limit_enabled", False)
+    monkeypatch.setattr(mailer_mod, "mailer", mailer_mod.MemoryMailer())  # capture "emails" in memory
     await engine.dispose()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
@@ -70,13 +72,25 @@ async def api(monkeypatch):
     await engine.dispose()
     ratelimit.user_limiter = ratelimit.TokenBucket(settings.rl_user_capacity, settings.rl_user_refill_per_sec)
     ratelimit.ip_limiter = ratelimit.TokenBucket(settings.rl_ip_capacity, settings.rl_ip_refill_per_sec)
+    ratelimit.auth_ip_limiter = ratelimit.TokenBucket(settings.rl_auth_capacity, settings.rl_auth_refill_per_sec)
 
 
 # ---- helpers shared by API tests -------------------------------------------
 
+async def request_code(api, email: str):
+    return await api.post("/api/auth/request-code", json={"email": email})
+
+
+def last_code(email: str) -> str:
+    return mailer_mod.mailer.latest[email.lower()]
+
+
 async def signup(api, name: str) -> dict:
-    r = await api.post("/api/auth/signup", json={"email": f"{name}@example.com", "password": "password123"})
-    assert r.status_code == 201, r.text
+    """Sign in the passwordless way: request a code, read it from the fake mailbox, verify."""
+    email = f"{name}@example.com"
+    assert (await request_code(api, email)).status_code == 202
+    r = await api.post("/api/auth/verify-code", json={"email": email, "code": last_code(email)})
+    assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
 

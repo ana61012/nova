@@ -24,6 +24,22 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-secret-change-me-before-deploying-0123456789"
     jwt_ttl_seconds: int = 86400
 
+    # Passwordless sign-in: a one-time code is emailed, then exchanged for a JWT
+    otp_ttl_seconds: int = 600          # a code is valid for 10 minutes
+    otp_max_attempts: int = 3           # wrong guesses before a code is dead
+    otp_resend_cooldown_seconds: int = 60
+    otp_max_codes_per_hour: int = 3     # caps total guesses per address: 5 codes x 5 attempts = 25/hour
+
+    # Email delivery. "console" prints the code to the server log (local dev),
+    # "memory" keeps it in-process and exposes it to the dev endpoint (tests and
+    # the load test), "smtp" really sends it.
+    email_backend: str = "console"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "DropEngine <no-reply@example.com>"
+
     # Payments (a fake gateway signs webhooks with this shared secret)
     webhook_secret: str = "whsec_dev"
     dev_mode: bool = True  # enables the payment simulator endpoint
@@ -34,6 +50,8 @@ class Settings(BaseSettings):
     rl_user_refill_per_sec: float = 2.0
     rl_ip_capacity: int = 60
     rl_ip_refill_per_sec: float = 20.0
+    rl_auth_capacity: int = 10          # request-code + verify-code, per IP
+    rl_auth_refill_per_sec: float = 0.2
 
     # Outbox
     outbox_interval_seconds: float = 1.0
