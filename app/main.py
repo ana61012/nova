@@ -79,6 +79,7 @@ async def outbox_step():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings.assert_safe_for_production()
     await init_db()
     await seed_if_empty()
     tasks = [
@@ -90,6 +91,7 @@ async def lifespan(app: FastAPI):
     yield
     for t in tasks:
         t.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)  # let them unwind before the loop closes
 
 
 app = FastAPI(title="DropEngine", lifespan=lifespan)
@@ -100,12 +102,16 @@ for r in (auth.router, drops.router, queue_router.router, reservations.router, o
 @app.middleware("http")
 async def record_latency(request: Request, call_next):
     start = time.perf_counter()
-    response = await call_next(request)
-    route = request.scope.get("route")
-    HTTP_LATENCY.labels(request.method, route.path if route else "unmatched", str(response.status_code)).observe(
-        time.perf_counter() - start
-    )
-    return response
+    status = 500  # what a crashing handler ends up as
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        route = request.scope.get("route")
+        HTTP_LATENCY.labels(request.method, route.path if route else "unmatched", str(status)).observe(
+            time.perf_counter() - start
+        )
 
 
 @app.get("/health")

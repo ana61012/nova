@@ -6,6 +6,3 @@ aiosqlite==0.20.*
 pydantic-settings==2.*
 pyjwt==2.*
 prometheus-client==0.21.*
-pytest==8.*
-pytest-asyncio==0.24.*
-httpx==0.27.*

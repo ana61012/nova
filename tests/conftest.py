@@ -9,11 +9,12 @@ os.environ["DROP_DATABASE_URL"] = f"sqlite+aiosqlite:///{_API_DB}"
 import httpx  # noqa: E402
 import pytest_asyncio  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker  # noqa: E402
+from sqlalchemy.pool import NullPool  # noqa: E402
 
 from app import ratelimit
 from app import db as db_mod  # noqa: E402
 from app.config import settings  # noqa: E402
-from app.db import Base, engine, init_db, make_engine  # noqa: E402
+from app.db import init_db, make_engine  # noqa: E402
 from app.models import Drop, Inventory, Product, utcnow  # noqa: E402
 from app.services import mailer as mailer_mod  # noqa: E402
 

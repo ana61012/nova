@@ -1,6 +1,10 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+DEV_JWT_SECRET = "dev-secret-change-me-before-deploying-0123456789"
+DEV_WEBHOOK_SECRET = "whsec_dev"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DROP_", env_file=".env")
 
@@ -21,14 +25,14 @@ class Settings(BaseSettings):
     queue_admit_window_seconds: int = 180
 
     # Auth
-    jwt_secret: str = "dev-secret-change-me-before-deploying-0123456789"
+    jwt_secret: str = DEV_JWT_SECRET
     jwt_ttl_seconds: int = 86400
 
     # Passwordless sign-in: a one-time code is emailed, then exchanged for a JWT
     otp_ttl_seconds: int = 600          # a code is valid for 10 minutes
     otp_max_attempts: int = 3           # wrong guesses before a code is dead
     otp_resend_cooldown_seconds: int = 60
-    otp_max_codes_per_hour: int = 3     # caps total guesses per address: 5 codes x 5 attempts = 25/hour
+    otp_max_codes_per_hour: int = 3     # caps total guesses per address: codes/hour x attempts per code (3 x 3 = 9)
 
     # Email delivery. "console" prints the code to the server log (local dev),
     # "memory" keeps it in-process and exposes it to the dev endpoint (tests and
@@ -41,7 +45,7 @@ class Settings(BaseSettings):
     smtp_from: str = "DropEngine <no-reply@example.com>"
 
     # Payments (a fake gateway signs webhooks with this shared secret)
-    webhook_secret: str = "whsec_dev"
+    webhook_secret: str = DEV_WEBHOOK_SECRET
     dev_mode: bool = True  # enables the payment simulator endpoint
 
     # Rate limits (token buckets)
@@ -55,6 +59,16 @@ class Settings(BaseSettings):
 
     # Outbox
     outbox_interval_seconds: float = 1.0
+
+    def assert_safe_for_production(self) -> None:
+        """Refuse to boot with the built-in dev secrets unless dev_mode is on."""
+        if self.dev_mode:
+            return
+        weak = [name for name, dev in (("DROP_JWT_SECRET", DEV_JWT_SECRET),
+                                       ("DROP_WEBHOOK_SECRET", DEV_WEBHOOK_SECRET))
+                if getattr(self, name[5:].lower()) == dev]
+        if weak:
+            raise RuntimeError(f"dev_mode is off but these still have their default value: {', '.join(weak)}")
 
 
 settings = Settings()
