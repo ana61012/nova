@@ -31,3 +31,11 @@ async def test_rate_limit_returns_429_with_retry_after(api, monkeypatch):
     assert codes[3:] == [429, 429]
     blocked = await reserve(api, h)
     assert blocked.headers["Retry-After"].isdigit()
+
+async def test_tokens_from_before_a_restart_are_rejected(api, monkeypatch):
+    from app import security
+
+    h = await signup(api, "restarter")
+    assert (await api.post("/api/queue/join", headers=h)).status_code != 401
+    monkeypatch.setattr(security, "BOOT_ID", "a-new-process")  # simulate a server restart
+    assert (await api.post("/api/queue/join", headers=h)).status_code == 401

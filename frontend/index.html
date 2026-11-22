@@ -158,7 +158,10 @@ const money = (c) => "₹" + (c / 100).toLocaleString("en-IN");
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const readJSON = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
 
-let session = readJSON("session", null);      // { token, email }
+// The session lives in memory only, so reloading the page signs you out. Wipe anything
+// an older version of this page left in localStorage (a stale session, cart or hold).
+for (const k of ["session", "hold", "order", "cart"]) localStorage.removeItem(k);
+let session = null;                          // { token, email }
 let products = [];
 let limits = { max_qty_per_product: 3, max_cart_lines: 5 };
 let queue = { state: "none" };
@@ -178,7 +181,7 @@ async function api(path, opts = {}) {
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
   if (session) headers.Authorization = "Bearer " + session.token;
   const r = await fetch(path, { ...opts, headers });
-  if (r.status === 401 && session && !path.startsWith("/api/auth")) { logout(); throw new Error("signed out"); }
+  if (r.status === 401 && session && !path.startsWith("/api/auth")) { logout(); toast("You were signed out. Please sign in again.", true); throw new Error("signed out"); }
   return r;
 }
 
@@ -244,7 +247,6 @@ document.querySelector("#auth").addEventListener("submit", async (e) => {
   if (!r.ok) { $("#authErr").textContent = (await detail(r)) || "Could not sign in."; return; }
   const d = await r.json();
   session = { token: d.token, email: d.email };
-  localStorage.setItem("session", JSON.stringify(session));
   clearInterval(resendTimer); pendingEmail = null; authStep("email");
   start();
 });
@@ -283,7 +285,7 @@ function renderQueue() {
   let html;
   if (queue.state === "waiting") {
     html = `<div><div class="sub">You are in line. Build your cart while you wait.</div><div class="big">#${queue.position}</div>
-            <div class="sub">${queue.waiting_total} waiting in total. Your spot is saved if you refresh.</div></div>
+            <div class="sub">${queue.waiting_total} waiting in total. Reloading the page signs you out, so stay on this tab.</div></div>
             <button class="ghost" data-q="leave">Leave line</button>`;
   } else if (queue.state === "admitted") {
     html = `<div><div class="sub">You're in. Reserve your cart</div><div class="big">${mm(left ?? 0)} left to shop</div></div>
