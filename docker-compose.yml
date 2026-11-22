@@ -12,6 +12,8 @@ services:
       retries: 10
 
   api:
+    env_file: 
+      .env
     build: .
     environment:
       DROP_DATABASE_URL: postgresql+asyncpg://drop:drop@db:5432/drop
