@@ -19,6 +19,15 @@ from app.models import Drop, Inventory, Product, utcnow  # noqa: E402
 from app.services import mailer as mailer_mod  # noqa: E402
 
 
+# (name, price_cents, image key, stock) -> product ids 1..4
+TEST_SEED = [
+    ("Test Sneaker", 18900, "pearl", 10),
+    ("Atlas Puffer Jacket", 24900, "aqua", 15),
+    ("Test Product 3", 4500, "sage", 25),
+    ("Test Product 4", 12900, "rouge", 12),
+]
+
+
 @pytest_asyncio.fixture
 async def sessions():
     """Fresh file-backed DB per test, so many sessions can write concurrently."""
@@ -58,8 +67,11 @@ async def api(monkeypatch):
     Product 1 has 10 units. The queue and rate limiter are off by default;
     tests that exercise them switch them on.
     """
+    import app.main as main_mod
     from app.main import app, seed_if_empty
 
+    # Tests rely on a fixed catalogue, independent of the storefront's real seed data.
+    monkeypatch.setattr(main_mod, "SEED", TEST_SEED)
     monkeypatch.setattr(settings, "queue_required", False)
     monkeypatch.setattr(settings, "rate_limit_enabled", False)
     monkeypatch.setattr(mailer_mod, "mailer", mailer_mod.MemoryMailer())  # capture "emails" in memory
