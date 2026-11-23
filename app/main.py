@@ -20,10 +20,11 @@ from .services import inventory, outbox, queue
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
 
 SEED = [
-    ("Shadow Runner 01", 18900, "👟", 10),
-    ("Atlas Puffer Jacket", 24900, "🧥", 15),
-    ("Mono Bucket Hat", 4500, "🧢", 25),
-    ("Vector Cargo Pants", 12900, "👖", 12),
+    # image_emoji holds a short key; the frontend shows /static/clothes/<key>.webp
+    ("Tidepool Set", 14900, "aqua", 12),
+    ("Rosewood Lace Set", 16900, "rouge", 8),
+    ("Fern & Butterfly Set", 15900, "sage", 15),
+    ("Pearl Corset Dress", 18900, "pearl", 10),
 ]
 
 
@@ -31,7 +32,7 @@ async def seed_if_empty():
     async with SessionLocal() as session:
         if (await session.execute(select(Drop.id).limit(1))).first():
             return
-        drop = Drop(name="Winter Drop 001", starts_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+        drop = Drop(name="The Moonlit Edit", starts_at=datetime.now(timezone.utc) - timedelta(minutes=1))
         session.add(drop)
         await session.flush()
         for name, price, emoji, stock in SEED:
@@ -94,7 +95,7 @@ async def lifespan(app: FastAPI):
     await asyncio.gather(*tasks, return_exceptions=True)  # let them unwind before the loop closes
 
 
-app = FastAPI(title="DropEngine", lifespan=lifespan)
+app = FastAPI(title="nova", lifespan=lifespan)
 for r in (auth.router, auth.admin_router, drops.router, queue_router.router, reservations.router, orders.router, stats.router):
     app.include_router(r)
 

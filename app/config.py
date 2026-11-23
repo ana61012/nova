@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     smtp_port: int = 587
     smtp_user: str = ""
     smtp_password: str = ""
-    smtp_from: str = "DropEngine <no-reply@example.com>"
+    smtp_from: str = "nova <no-reply@example.com>"
 
     # Payments (a fake gateway signs webhooks with this shared secret)
     webhook_secret: str = DEV_WEBHOOK_SECRET

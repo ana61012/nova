@@ -1,6 +1,6 @@
-# DropEngine
+# nova
 
-A limited-drop commerce backend (think sneaker and streetwear releases) built for the moment thousands of people try to buy a few hundred items at once. The goal is simple to state and hard to get right: **never oversell, never double-charge, stay fair under load.**
+A limited-drop commerce backend (small-run fashion releases) built for the moment thousands of people try to buy a few hundred items at once. The goal is simple to state and hard to get right: **never oversell, never double-charge, stay fair under load.**
 
 **Stack:** FastAPI (async) · SQLAlchemy 2 · PostgreSQL (SQLite for zero-setup local runs) · JWT auth · Server-Sent Events · Prometheus · vanilla JS frontend
 

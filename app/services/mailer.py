@@ -17,7 +17,7 @@ class Mailer(Protocol):
 
 def _body(code: str, ttl_minutes: int) -> str:
     return (
-        f"Your DropEngine sign-in code is {code}\n\n"
+        f"Your nova sign-in code is {code}\n\n"
         f"It expires in {ttl_minutes} minutes and works once. "
         "If you didn't ask for it, you can ignore this email."
     )
