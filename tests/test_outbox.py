@@ -4,7 +4,7 @@ from app.db import SessionLocal
 from app.models import Notification, OutboxEvent, ProcessedEvent, SalesStat
 from app.services import outbox
 
-from .conftest import buy_to_order, signup
+from .conftest import buy_to_order, get_stats, signup
 from .test_orders import expire_everything, pay
 
 
@@ -29,7 +29,7 @@ async def test_paid_order_reaches_email_and_analytics(api):
         stat = (await s.execute(select(SalesStat))).scalar_one()
     assert note.kind == "order.paid"
     assert (stat.orders, stat.units, stat.revenue_cents) == (1, 1, 18900)
-    stats = (await api.get("/api/stats")).json()
+    stats = await get_stats(api)
     assert stats["outbox_pending"] == 0 and stats["analytics"]["revenue_cents"] == 18900
 
 

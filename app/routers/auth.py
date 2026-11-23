@@ -2,6 +2,7 @@
 
     POST /api/auth/request-code  {email}        -> 202 (always, whether or not the address is known)
     POST /api/auth/verify-code   {email, code}  -> 200 {token, user_id, email}
+    POST /api/admin/login        {username, password} -> 200 {token, expires_in}   (dashboard only)
 
 There is no separate signup: the first successful verification creates the account.
 """
@@ -11,8 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import settings
 from ..db import get_session
 from ..ratelimit import limit_auth
-from ..schemas import CodeSentOut, EmailIn, TokenOut, VerifyIn
-from ..security import create_token
+from ..schemas import AdminLoginIn, AdminTokenOut, CodeSentOut, EmailIn, TokenOut, VerifyIn
+from ..security import check_admin_credentials, create_admin_token, create_token
 from ..services import mailer, otp
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -46,6 +47,17 @@ async def verify_code(body: VerifyIn, request: Request, session: AsyncSession = 
     if user is None:
         raise HTTPException(401, "Invalid or expired code")
     return TokenOut(token=create_token(user.id), user_id=user.id, email=email)
+
+
+admin_router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+@admin_router.post("/login", response_model=AdminTokenOut)
+async def admin_login(body: AdminLoginIn, request: Request):
+    limit_auth(request)  # same tight per-IP bucket as the shop sign-in: this takes password guesses
+    if not check_admin_credentials(body.username, body.password):
+        raise HTTPException(401, "Wrong username or password")
+    return AdminTokenOut(token=create_admin_token(), expires_in=settings.admin_jwt_ttl_seconds)
 
 
 if settings.dev_mode and settings.email_backend.lower() == "memory":

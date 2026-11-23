@@ -95,7 +95,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="DropEngine", lifespan=lifespan)
-for r in (auth.router, drops.router, queue_router.router, reservations.router, orders.router, stats.router):
+for r in (auth.router, auth.admin_router, drops.router, queue_router.router, reservations.router, orders.router, stats.router):
     app.include_router(r)
 
 
@@ -134,4 +134,5 @@ async def index():
 
 @app.get("/dashboard")
 async def dashboard():
-    return FileResponse(FRONTEND / "dashboard.html")
+    # no-store: the browser must not keep this page (and its JS state) for back/forward restores.
+    return FileResponse(FRONTEND / "dashboard.html", headers={"Cache-Control": "no-store"})

@@ -19,6 +19,7 @@ units clients paid for differ from the units the server recorded as sold.
 """
 import argparse
 import asyncio
+import os
 import random
 import sys
 import time
@@ -114,6 +115,15 @@ async def shopper(i: int, client: httpx.AsyncClient, args, run: str, gate: async
         out["errors"] += 1
 
 
+async def fetch_stats(client, args) -> dict:
+    """/api/stats is operator-only: sign in as the dashboard admin, then read it."""
+    r = await client.post("/api/admin/login", json={"username": args.admin_user, "password": args.admin_password})
+    r.raise_for_status()
+    r = await client.get("/api/stats", headers={"Authorization": "Bearer " + r.json()["token"]})
+    r.raise_for_status()
+    return r.json()
+
+
 async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-url", default="http://localhost:8000")
@@ -122,6 +132,8 @@ async def main() -> int:
     ap.add_argument("--max-qty", type=int, default=2, help="max units of the main product per cart")
     ap.add_argument("--poll", type=float, default=1.0, help="seconds between queue status polls")
     ap.add_argument("--timeout", type=float, default=180, help="give up waiting for admission after this long")
+    ap.add_argument("--admin-user", default=os.environ.get("DROP_ADMIN_USERNAME", "admin"))
+    ap.add_argument("--admin-password", default=os.environ.get("DROP_ADMIN_PASSWORD", "admin-dev-change-me"))
     args = ap.parse_args()
 
     run = uuid.uuid4().hex[:6]
@@ -129,7 +141,7 @@ async def main() -> int:
            "join_ms": [], "reserve_ms": [], "units": defaultdict(int)}
     limits = httpx.Limits(max_connections=args.users + 10, max_keepalive_connections=args.users + 10)
     async with httpx.AsyncClient(base_url=args.base_url, timeout=60, limits=limits) as client:
-        before = (await client.get("/api/stats")).json()
+        before = await fetch_stats(client, args)
         others = [p["id"] for p in before["products"] if p["id"] != args.product]
 
         gate = asyncio.Event()
@@ -155,7 +167,7 @@ async def main() -> int:
 
         # let the outbox relay catch up so the backlog figure is meaningful
         await asyncio.sleep(2)
-        stats = (await client.get("/api/stats")).json()
+        stats = await fetch_stats(client, args)
 
     products = stats["products"]
     oversold = [p["name"] for p in products if p["sold"] > p["total"] or p["available"] < 0]

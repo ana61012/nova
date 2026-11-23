@@ -127,6 +127,24 @@ async def buy_to_order(api, headers, product_id=1, qty=1, items=None) -> dict:
     return order.json()
 
 
+async def admin_login(api, username=None, password=None):
+    return await api.post("/api/admin/login", json={
+        "username": username or settings.admin_username, "password": password or settings.admin_password,
+    })
+
+
+async def admin_headers(api) -> dict:
+    r = await admin_login(api)
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['token']}"}
+
+
+async def get_stats(api) -> dict:
+    r = await api.get("/api/stats", headers=await admin_headers(api))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
 async def stock(api, product_id=1) -> dict:
-    stats = (await api.get("/api/stats")).json()
+    stats = await get_stats(api)
     return next(p for p in stats["products"] if p["id"] == product_id)

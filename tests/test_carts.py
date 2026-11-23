@@ -12,7 +12,7 @@ from app.db import SessionLocal
 from app.models import CustomerQuota, Inventory, SalesStat
 from app.services import outbox
 
-from .conftest import buy_to_order, reserve, signup, stock
+from .conftest import buy_to_order, get_stats, reserve, signup, stock
 from .test_orders import expire_everything, pay
 
 CART = [{"product_id": 1, "qty": 2}, {"product_id": 3, "qty": 1}]  # 2*18900 + 4500 = 42300
@@ -51,7 +51,7 @@ async def test_cart_with_several_products_and_quantities(api):
 
     assert (await pay(api, h, order["id"]))["order_status"] == "paid"
     assert (await stock(api, 1))["sold"] == 2 and (await stock(api, 3))["sold"] == 1
-    assert (await api.get("/api/stats")).json()["all_consistent"] is True
+    assert (await get_stats(api))["all_consistent"] is True
 
 
 async def test_same_product_listed_twice_is_merged(api):
@@ -127,7 +127,7 @@ async def test_overlapping_carts_under_load_never_oversell_or_leak(api):
     sneakers, jackets = await stock(api, 1), await stock(api, 2)
     assert (sneakers["available"], sneakers["sold"]) == (0, 10)
     assert (jackets["available"], jackets["sold"], jackets["held"]) == (10, 5, 0)  # nothing leaked
-    assert (await api.get("/api/stats")).json()["all_consistent"] is True
+    assert (await get_stats(api))["all_consistent"] is True
 
 
 async def test_expiry_returns_every_line_and_the_quota(api):
@@ -146,7 +146,7 @@ async def test_refund_returns_every_line(api):
     assert (await pay(api, h, order["id"], "refund"))["order_status"] == "refunded"
     assert (await stock(api, 1))["available"] == 10 and (await stock(api, 3))["available"] == 25
     assert await quota_total(1) == 0
-    assert (await api.get("/api/stats")).json()["all_consistent"] is True
+    assert (await get_stats(api))["all_consistent"] is True
 
 
 async def test_late_payment_takes_the_whole_cart_when_still_available(api):
@@ -157,7 +157,7 @@ async def test_late_payment_takes_the_whole_cart_when_still_available(api):
     assert result["outcomes"] == ["paid_late"] and result["order_status"] == "paid"
     assert (await stock(api, 1))["sold"] == 2 and (await stock(api, 3))["sold"] == 1
     assert await quota_total(1) == 2
-    assert (await api.get("/api/stats")).json()["all_consistent"] is True
+    assert (await get_stats(api))["all_consistent"] is True
 
 
 async def test_late_payment_is_all_or_nothing(api):

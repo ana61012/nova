@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEV_JWT_SECRET = "dev-secret-change-me-before-deploying-0123456789"
 DEV_WEBHOOK_SECRET = "whsec_dev"
+DEV_ADMIN_PASSWORD = "admin-dev-change-me"
 
 
 class Settings(BaseSettings):
@@ -27,6 +28,12 @@ class Settings(BaseSettings):
     # Auth
     jwt_secret: str = DEV_JWT_SECRET
     jwt_ttl_seconds: int = 86400
+
+    # Dashboard (operator) sign-in. Separate from the shop's emailed-code login: one
+    # shared operator account, short-lived tokens that only work on admin endpoints.
+    admin_username: str = "admin"
+    admin_password: str = DEV_ADMIN_PASSWORD
+    admin_jwt_ttl_seconds: int = 3600
 
     # Passwordless sign-in: a one-time code is emailed, then exchanged for a JWT
     otp_ttl_seconds: int = 600          # a code is valid for 10 minutes
@@ -65,7 +72,8 @@ class Settings(BaseSettings):
         if self.dev_mode:
             return
         weak = [name for name, dev in (("DROP_JWT_SECRET", DEV_JWT_SECRET),
-                                       ("DROP_WEBHOOK_SECRET", DEV_WEBHOOK_SECRET))
+                                       ("DROP_WEBHOOK_SECRET", DEV_WEBHOOK_SECRET),
+                                       ("DROP_ADMIN_PASSWORD", DEV_ADMIN_PASSWORD))
                 if getattr(self, name[5:].lower()) == dev]
         if weak:
             raise RuntimeError(f"dev_mode is off but these still have their default value: {', '.join(weak)}")

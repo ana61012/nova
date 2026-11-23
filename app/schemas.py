@@ -67,6 +67,16 @@ class TokenOut(BaseModel):
     email: str
 
 
+class AdminLoginIn(BaseModel):
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=1, max_length=200)
+
+
+class AdminTokenOut(BaseModel):
+    token: str
+    expires_in: int
+
+
 class OrderIn(BaseModel):
     reservation_id: str
 

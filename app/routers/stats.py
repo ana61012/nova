@@ -7,9 +7,10 @@ from ..models import (
     Drop, Inventory, Order, OrderStatus, OutboxEvent, Product, QueueEntry, Reservation,
     ReservationItem, ReservationStatus, SalesStat,
 )
+from ..security import require_admin
 from ..services import queue
 
-router = APIRouter(prefix="/api", tags=["stats"])
+router = APIRouter(prefix="/api", tags=["stats"], dependencies=[Depends(require_admin)])
 
 
 @router.get("/stats")

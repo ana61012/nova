@@ -12,11 +12,11 @@ pip install -r requirements.txt
 
 uvicorn app.main:app --reload --timeout-keep-alive 30
 # shop:      http://localhost:8000
-# dashboard: http://localhost:8000/dashboard
+# dashboard: http://localhost:8000/dashboard   (operator login: admin / admin-dev-change-me)
 # API docs:  http://localhost:8000/docs
 # metrics:   http://localhost:8000/metrics
 
-pytest -q                       # 36 tests
+pytest -q                       # 73 tests
 docker compose up --build       # Postgres + API + Prometheus
 ```
 
@@ -83,7 +83,8 @@ Transitions are conditional `UPDATE`s checked against an `ALLOWED` table, so an 
 | GET | `/api/orders/{id}` | Your order |
 | POST | `/webhooks/payments` | Gateway entry point, HMAC-signed |
 | POST | `/api/dev/payments/{order_id}/simulate?outcome=success\|fail\|refund&duplicate=` | Fake gateway for demos (`DROP_DEV_MODE=false` disables it) |
-| GET | `/api/stats` | Dashboard data plus the **inventory audit** (`available + held + sold == total`) |
+| POST | `/api/admin/login` | `{username, password}` -> short-lived admin token (dashboard only; separate from the shop's emailed-code login) |
+| GET | `/api/stats` | **Admin token required.** Dashboard data plus the **inventory audit** (`available + held + sold == total`) |
 | GET | `/metrics` | Prometheus |
 
 ## Load test
@@ -124,7 +125,7 @@ An early run of this test dropped a few client connections under saturation (a k
 - **Scaling out:** the admitter, sweeper and outbox relay run inside the API process, and the default rate limiter is per-process, so run one worker. The queue and reservation SQL is concurrency-safe by construction (conditional updates, unique indexes), but multi-worker needs background jobs split into their own process and a shared limiter. The outbox relay already tolerates overlap (`processed_events`); `SKIP LOCKED` would remove the duplicated work.
 - **Payments are simulated.** The webhook handler is real (signature, dedupe, state machine); the gateway is a dev endpoint.
 - **Tests run on SQLite.** The Postgres path (`docker-compose.yml`) is configured but was not exercised in development.
-- **Auth is minimal:** no email verification, refresh tokens or password reset. scrypt parameters are lowered for speed; raise them for real use. Change `DROP_JWT_SECRET` and `DROP_WEBHOOK_SECRET` before deploying.
+- **Auth is minimal:** no email verification, refresh tokens or password reset. scrypt parameters are lowered for speed; raise them for real use. Change `DROP_JWT_SECRET`, `DROP_WEBHOOK_SECRET` and `DROP_ADMIN_PASSWORD` before deploying (with `DROP_DEV_MODE=false` the server refuses to boot while any still has its default). The dashboard login is one shared operator account (`DROP_ADMIN_USERNAME` / `DROP_ADMIN_PASSWORD`, token lifetime `DROP_ADMIN_JWT_TTL_SECONDS`). Its token is kept only in page memory, so reloading, re-opening the page or restarting the server always returns to the login screen.
 - Prometheus is scraped, but no Grafana dashboard ships; `/dashboard` covers live viewing.
 
 ## Project layout
@@ -138,5 +139,5 @@ app/
   security.py        scrypt + JWT          ratelimit.py   token bucket + dependency
 frontend/            index.html (shop), dashboard.html (live view)
 scripts/loadtest.py  drop simulator and auditor
-tests/               36 tests: concurrency, queue, payments, outbox, auth, rate limiting
+tests/               73 tests: concurrency, queue, payments, outbox, auth, rate limiting
 ```

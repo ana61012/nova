@@ -285,7 +285,7 @@ function renderQueue() {
   let html;
   if (queue.state === "waiting") {
     html = `<div><div class="sub">You are in line. Build your cart while you wait.</div><div class="big">#${queue.position}</div>
-            <div class="sub">${queue.waiting_total} waiting in total. Reloading the page signs you out, so stay on this tab.</div></div>
+            <div class="sub">${queue.waiting_total} waiting in total. Leaving or reloading this page signs you out.</div></div>
             <button class="ghost" data-q="leave">Leave line</button>`;
   } else if (queue.state === "admitted") {
     html = `<div><div class="sub">You're in. Reserve your cart</div><div class="big">${mm(left ?? 0)} left to shop</div></div>
@@ -514,6 +514,10 @@ function start() {
   clearInterval(pollTimer);
   pollTimer = setInterval(load, 1500);
 }
+
+// Coming back via the browser's back/forward buttons can restore the old page from
+// its cache with the session still in memory; treat that like a fresh visit.
+window.addEventListener("pageshow", (e) => { if (e.persisted && session) logout(); });
 
 setInterval(tick, 500);
 if (session) start(); else show();

@@ -27,12 +27,42 @@
   .bar i { display:block; height:100%; }
   .legend { color: var(--muted); font-size: 12px; margin: 8px 0 24px; }
   a { color: var(--accent); }
+  .hidden { display: none !important; }
+  .login { max-width: 360px; margin: 12vh auto 0; background: var(--panel); border: 1px solid var(--line);
+           border-radius: 14px; padding: 22px; }
+  .login h2 { margin: 0 0 4px; font-size: 20px; }
+  .login label { display:block; color: var(--muted); font-size: 12px; margin: 14px 0 6px; }
+  .login input { width:100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line);
+                 background: #0f0f12; color: var(--text); font-size: 15px; }
+  .login input:focus { outline: 1px solid var(--accent); }
+  .login button, .out { cursor: pointer; font-weight: 600; border-radius: 8px; border: 0; }
+  .login button { width:100%; margin-top: 18px; padding: 11px; background: var(--accent); color: #111; font-size: 15px; }
+  .login button:disabled { opacity: .6; cursor: default; }
+  .err { color: var(--danger); font-size: 13px; min-height: 18px; margin-top: 12px; }
+  .out { background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 4px 10px; font-size: 12px; margin-left: 8px; }
+  .out:hover { color: var(--text); }
 </style>
 </head>
 <body>
+<section id="loginView" class="login">
+  <h2>Dashboard sign-in</h2>
+  <div class="sub">Operators only. This is separate from the shop login.</div>
+  <form id="loginForm" autocomplete="off">
+    <label for="user">Username</label>
+    <input id="user" name="user" autocomplete="off" required>
+    <label for="pass">Password</label>
+    <input id="pass" name="pass" type="password" autocomplete="off" required>
+    <button type="submit" id="loginBtn">Sign in</button>
+    <div class="err" id="loginErr" role="alert"></div>
+  </form>
+  <div class="sub" style="margin-top:8px"><a href="/">← back to shop</a></div>
+</section>
+
+<div id="dashView" class="hidden">
 <header>
   <h1>Live drop dashboard</h1>
-  <div class="sub"><span id="drop">…</span> · refreshes every second · <a href="/">shop</a></div>
+  <div class="sub"><span id="drop">…</span> · refreshes every second · <a href="/">shop</a>
+    <button class="out" id="logout" type="button">Log out</button></div>
 </header>
 <main>
   <div class="tiles">
@@ -51,15 +81,69 @@
   </table>
   <div class="legend">Bar: <span class="ok">sold</span> · <span style="color:var(--warn)">held (unpaid)</span> · available (empty). Audit: available + held + sold = total.</div>
 </main>
+</div>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const money = (c) => "₹" + Math.round(c / 100).toLocaleString("en-IN");
+
+// The admin token lives ONLY in this variable: never localStorage, sessionStorage or a
+// cookie. A reload, a re-opened tab or a re-visit starts with token = null, so the
+// login screen always comes first. (The server also rejects every token issued before
+// its last restart, which covers "server reloaded".)
+let token = null;
 let prev = null;
+let timer = null;
+
+function showLogin(message) {
+  token = null; prev = null;
+  clearInterval(timer); timer = null;
+  $("dashView").classList.add("hidden");
+  $("loginView").classList.remove("hidden");
+  $("loginErr").textContent = message || "";
+  $("pass").value = "";
+  $("rows").innerHTML = "";
+  $("user").focus();
+}
+
+function showDashboard() {
+  $("loginView").classList.add("hidden");
+  $("dashView").classList.remove("hidden");
+  $("loginErr").textContent = "";
+  tick(); timer = setInterval(tick, 1000);
+}
+
+$("loginForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = $("loginBtn"); btn.disabled = true; $("loginErr").textContent = "";
+  try {
+    const r = await fetch("/api/admin/login", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: $("user").value.trim(), password: $("pass").value }),
+    });
+    if (r.status === 429) { $("loginErr").textContent = "Too many attempts. Wait a moment and try again."; return; }
+    if (!r.ok) { $("loginErr").textContent = r.status === 401 ? "Wrong username or password." : "Could not sign in."; return; }
+    token = (await r.json()).token;
+    $("pass").value = "";
+    showDashboard();
+  } catch { $("loginErr").textContent = "Could not reach the server."; }
+  finally { btn.disabled = false; }
+});
+
+$("logout").addEventListener("click", () => showLogin("You have been logged out."));
+
+// Back/forward can restore a page from the browser's cache with its JS state intact;
+// treat that like a fresh visit.
+window.addEventListener("pageshow", (e) => { if (e.persisted) location.reload(); });
 
 async function tick() {
-  let s;
-  try { s = await (await fetch("/api/stats")).json(); } catch { return; }
+  if (!token) return;
+  let r;
+  try { r = await fetch("/api/stats", { headers: { Authorization: "Bearer " + token }, cache: "no-store" }); }
+  catch { return; }  // server briefly down: keep trying; the first answer after it is back decides
+  if (r.status === 401) { showLogin("Session ended (the server restarted or the session expired). Please sign in again."); return; }
+  if (!r.ok) return;
+  const s = await r.json();
   const now = performance.now();
   $("drop").textContent = s.drop || "no drop";
   $("waiting").textContent = s.queue.waiting;
@@ -88,7 +172,8 @@ async function tick() {
       <td class="${p.consistent ? "ok" : "bad"}">${p.consistent ? "✓" : "✗"}</td></tr>`;
   }).join("");
 }
-tick(); setInterval(tick, 1000);
+
+showLogin();
 </script>
 </body>
 </html>
