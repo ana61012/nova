@@ -216,13 +216,18 @@ async def _on_refunded(session: AsyncSession, intent_id: str) -> str:
 
 
 async def process_webhook(session: AsyncSession, raw: bytes, signature: str | None) -> dict:
-    """Verify, dedupe, apply. Returns {"outcome": ...}. Commits on success."""
+    """Verify (our simulated gateway's HMAC), dedupe, apply. Returns {"outcome": ...}."""
     if not hmac.compare_digest(sign(raw), signature or ""):
         raise InvalidSignature()
     event = json.loads(raw)
-    intent_id = event["data"]["payment_intent_id"]
+    return await apply_event(session, event["id"], event["type"], event["data"]["payment_intent_id"])
 
-    session.add(WebhookEvent(event_id=event["id"], type=event["type"]))
+
+async def apply_event(session: AsyncSession, event_id: str, event_type: str, intent_id: str) -> dict:
+    """Gateway-agnostic core: record the event id once, then drive the state machine.
+    `event_type` is one of payment.succeeded / payment.failed / payment.refunded.
+    Commits on success."""
+    session.add(WebhookEvent(event_id=event_id, type=event_type))
     try:
         await session.flush()
     except IntegrityError:
@@ -230,16 +235,16 @@ async def process_webhook(session: AsyncSession, raw: bytes, signature: str | No
         return {"outcome": "duplicate_event"}
 
     try:
-        if event["type"] == "payment.succeeded":
+        if event_type == "payment.succeeded":
             outcome = await _on_succeeded(session, intent_id)
-        elif event["type"] == "payment.refunded":
+        elif event_type == "payment.refunded":
             outcome = await _on_refunded(session, intent_id)
-        elif event["type"] == "payment.failed":
+        elif event_type == "payment.failed":
             outcome = "payment_failed_retry_allowed"  # the hold stays; the buyer can retry
         else:
             outcome = "ignored_unknown_type"
         await session.execute(
-            update(WebhookEvent).where(WebhookEvent.event_id == event["id"]).values(outcome=outcome)
+            update(WebhookEvent).where(WebhookEvent.event_id == event_id).values(outcome=outcome)
         )
         await session.commit()
     except Exception:

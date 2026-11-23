@@ -37,11 +37,17 @@
       <p class="lede rise">Small runs. A fair queue. Never oversold.</p>
       <form class="auth rise" id="auth">
         <h2>Join the drop</h2>
-        <!-- step 1: email -->
+        <div class="row" id="authTabs">
+          <button type="button" data-mode="signup" style="flex:1">Create account</button>
+          <button type="button" data-mode="login" style="flex:1">Log in</button>
+        </div>
+        <!-- step 1: email + password (or just email, for the emailed-code option) -->
         <div id="stepEmail">
-          <input id="authEmail" type="email" placeholder="Email" autocomplete="email">
-          <div class="sub" style="margin:8px 0 14px">No password. We'll email you a 6-digit code.</div>
-          <button class="buy" type="submit" style="width:100%" id="sendBtn">Send me a code</button>
+          <input id="authEmail" type="email" placeholder="Email" autocomplete="email" style="width:100%">
+          <input id="authPassword" type="password" placeholder="Password (at least 8 characters)" autocomplete="new-password" style="width:100%;margin-top:10px">
+          <div class="sub" id="authHint" style="margin:8px 0 14px"></div>
+          <button class="buy" type="submit" style="width:100%" id="sendBtn">Create account</button>
+          <div style="margin-top:12px;text-align:center"><button class="link" type="button" id="modeSwitch"></button></div>
         </div>
         <!-- step 2: code -->
         <div id="stepCode" class="hidden">
@@ -87,7 +93,7 @@
   </div>
 </main>
 
-<footer>nova · <a href="/dashboard">live dashboard</a> · payments are simulated</footer>
+<footer>nova · <a href="/dashboard">live dashboard</a> · <span id="payNote">payments are simulated</span></footer>
 <div id="toast"></div>
 
 <script>
@@ -108,6 +114,8 @@ let cart = {};      // { [productId]: qty }: a wish list. It holds NO stock unti
 let hold = null;    // { id, items: [{product_id, qty}], expires_at }
 let order = null;   // { id, amount_cents }
 let stream = null, pollTimer = null, gridSig = "";
+let payments = { provider: "simulated", key_id: null };   // from /api/payments/config
+let rzpOpen = false;                                       // Razorpay modal is on screen
 
 function toast(msg, isErr) {
   const t = $("#toast");
@@ -125,7 +133,12 @@ async function api(path, opts = {}) {
 
 // FastAPI sends a string for our own errors and a list for validation errors.
 async function detail(r) {
-  try { const d = (await r.json()).detail; return typeof d === "string" ? d : "That request was not valid."; }
+  try {
+    const d = (await r.json()).detail;
+    if (typeof d === "string") return d;
+    if (r.status === 422) return "Please check your details and try again.";
+    return "That request was not valid.";
+  }
   catch { return ""; }
 }
 
@@ -150,6 +163,7 @@ let pendingEmail = null, resendTimer = null;
 function authStep(step) {
   $("#stepEmail").classList.toggle("hidden", step !== "email");
   $("#stepCode").classList.toggle("hidden", step !== "code");
+  $("#authTabs").classList.toggle("hidden", step === "code");
   $("#authErr").textContent = "";
   if (step === "code") { $("#sentTo").textContent = pendingEmail; $("#authCode").value = ""; $("#authCode").focus(); }
 }
@@ -182,12 +196,60 @@ async function sendCode() {
   authStep("code"); startResendCountdown(d.resend_after);
 }
 
+// authMode: "signup" (email + new password) | "login" (email + password) | "code" (emailed 6-digit code)
+let authMode = "signup";
+const MODE = {
+  signup: { btn: "Create account", hint: "Pick a password. You'll be signed in straight away.", pw: "new-password" },
+  login:  { btn: "Log in", hint: "", pw: "current-password" },
+  code:   { btn: "Send me a code", hint: "No password needed. We'll email you a 6-digit code.", pw: "" },
+};
+function setMode(m) {
+  authMode = m;
+  for (const t of document.querySelectorAll("#authTabs [data-mode]")) {
+    const on = t.dataset.mode === m || (m === "code" && t.dataset.mode === "login");
+    t.className = on ? "buy" : "ghost";
+  }
+  $("#authPassword").classList.toggle("hidden", m === "code");
+  $("#authPassword").autocomplete = MODE[m].pw || "off";
+  $("#authHint").textContent = MODE[m].hint;
+  $("#sendBtn").textContent = MODE[m].btn;
+  $("#modeSwitch").textContent = m === "code" ? "Use a password instead" : "Email me a sign-in code instead";
+  $("#authErr").textContent = "";
+}
+$("#authTabs").addEventListener("click", (e) => { const t = e.target.closest("[data-mode]"); if (t) setMode(t.dataset.mode); });
+$("#modeSwitch").addEventListener("click", () => setMode(authMode === "code" ? "login" : "code"));
+setMode("signup");
+
+function signedIn(d) {
+  session = { token: d.token, email: d.email };
+  clearInterval(resendTimer); pendingEmail = null; authStep("email");
+  $("#authPassword").value = "";
+  start();
+}
+
 document.querySelector("#auth").addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!pendingEmail || !$("#stepEmail").classList.contains("hidden")) {
-    pendingEmail = $("#authEmail").value.trim().toLowerCase();
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(pendingEmail)) { pendingEmail = null; $("#authErr").textContent = "Enter a valid email address."; return; }
-    return sendCode();
+    const email = $("#authEmail").value.trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { $("#authErr").textContent = "Enter a valid email address."; return; }
+    if (authMode === "code") { pendingEmail = email; return sendCode(); }
+
+    const password = $("#authPassword").value;
+    if (authMode === "signup" && password.length < 8) { $("#authErr").textContent = "Use a password of at least 8 characters."; return; }
+    if (!password) { $("#authErr").textContent = "Enter your password."; return; }
+    const btn = $("#sendBtn"); btn.disabled = true; $("#authErr").textContent = "";
+    try {
+      const r = await api("/api/auth/" + authMode, { method: "POST", body: JSON.stringify({ email, password }) });
+      if (r.status === 429) { $("#authErr").textContent = "Too many attempts. Wait a moment and try again."; return; }
+      if (!r.ok) {
+        const msg = await detail(r);
+        $("#authErr").textContent = msg || (authMode === "signup" ? "Could not create the account." : "Could not log in.");
+        return;
+      }
+      signedIn(await r.json());
+    } catch { $("#authErr").textContent = "Could not reach the server."; }
+    finally { btn.disabled = false; }
+    return;
   }
   $("#authErr").textContent = "";
   const r = await api("/api/auth/verify-code", {
@@ -195,10 +257,7 @@ document.querySelector("#auth").addEventListener("submit", async (e) => {
     body: JSON.stringify({ email: pendingEmail, code: $("#authCode").value.trim() }),
   });
   if (!r.ok) { $("#authErr").textContent = (await detail(r)) || "Could not sign in."; return; }
-  const d = await r.json();
-  session = { token: d.token, email: d.email };
-  clearInterval(resendTimer); pendingEmail = null; authStep("email");
-  start();
+  signedIn(await r.json());
 });
 $("#resendBtn").addEventListener("click", sendCode);
 $("#changeEmail").addEventListener("click", () => { clearInterval(resendTimer); pendingEmail = null; authStep("email"); });
@@ -409,10 +468,13 @@ function renderHold() {
   $("#holdStatus").textContent = order ? "Order created. Awaiting payment." : "Not checked out yet.";
   $("#holdLines").innerHTML = linesHtml(hold.items);
   $("#holdTotal").textContent = money(order ? order.amount_cents : linesTotal(hold.items));
+  const real = payments.provider === "razorpay";
   $("#holdActions").innerHTML = order
-    ? `<button class="buy" data-h="pay">Pay now</button>
-       <button class="danger" data-h="decline">Simulate declined card</button>
-       <button class="ghost" data-h="cancel">Release</button>`
+    ? (real
+        ? `<button class="buy" data-h="rzp">Pay with Razorpay</button>`
+        : `<button class="buy" data-h="pay">Pay now</button>
+           <button class="danger" data-h="decline">Simulate declined card</button>`) +
+      `<button class="ghost" data-h="cancel">Release</button>`
     : `<button class="buy" data-h="checkout">Checkout</button>
        <button class="ghost" data-h="cancel">Release</button>`;
 }
@@ -434,18 +496,13 @@ $("#holdActions").addEventListener("click", async (e) => {
     setHold(hold, { id: o.id, amount_cents: o.amount_cents });
     return;
   }
+  if (action === "rzp") return payWithRazorpay();
   // pay / decline: the dev endpoint plays the payment gateway and sends a signed webhook
   const outcome = action === "pay" ? "success" : "fail";
   const r = await api(`/api/dev/payments/${order.id}/simulate?outcome=${outcome}`, { method: "POST" });
   const d = await r.json();
   if (d.order_status === "paid") {
-    $("#done").innerHTML = `<div class="row"><div class="sub">Order confirmed. A confirmation email is on its way.</div>
-      <button class="ghost" id="dismiss">Dismiss</button></div>
-      <div class="lines">${linesHtml(hold.items)}</div>
-      <div class="total"><span>Paid</span><span>${money(order.amount_cents)}</span></div>`;
-    $("#done").classList.remove("hidden");
-    $("#dismiss").onclick = () => $("#done").classList.add("hidden");
-    setHold(null, null); load();
+    showPaid(hold.items, order.amount_cents);
   } else if (outcome === "fail") {
     toast("Card declined. Your hold is kept, try paying again.", true); renderHold();
   } else {
@@ -453,11 +510,70 @@ $("#holdActions").addEventListener("click", async (e) => {
   }
 });
 
+function showPaid(items, amountCents) {
+  $("#done").innerHTML = `<div class="row"><div class="sub">Order confirmed. A confirmation email is on its way.</div>
+    <button class="ghost" id="dismiss">Dismiss</button></div>
+    <div class="lines">${linesHtml(items)}</div>
+    <div class="total"><span>Paid</span><span>${money(amountCents)}</span></div>`;
+  $("#done").classList.remove("hidden");
+  $("#dismiss").onclick = () => $("#done").classList.add("hidden");
+  setHold(null, null); load();
+}
+
+// ---- Razorpay Checkout
+let rzpScript = null;
+function loadRazorpay() {
+  if (window.Razorpay) return Promise.resolve();
+  rzpScript ??= new Promise((resolve, reject) => {
+    const el = document.createElement("script");
+    el.src = "https://checkout.razorpay.com/v1/checkout.js";
+    el.onload = resolve;
+    el.onerror = () => { rzpScript = null; reject(new Error("Could not load Razorpay")); };
+    document.head.appendChild(el);
+  });
+  return rzpScript;
+}
+
+async function payWithRazorpay() {
+  const items = hold.items, myOrder = order;
+  try {
+    const [r] = await Promise.all([
+      api("/api/payments/razorpay/order", { method: "POST", body: JSON.stringify({ order_id: myOrder.id }) }),
+      loadRazorpay(),
+    ]);
+    if (!r.ok) { toast((await detail(r)) || "Could not start the payment.", true); renderHold(); return; }
+    const o = await r.json();
+    rzpOpen = true;
+    const rz = new window.Razorpay({
+      key: o.key_id, amount: o.amount, currency: o.currency, name: "nova",
+      description: "Your nova order", order_id: o.razorpay_order_id,
+      prefill: { email: session.email }, theme: { color: "#3b3340" },
+      handler: async (resp) => {
+        // Razorpay says the payment went through; the server checks its signature before trusting it.
+        try {
+          const v = await api("/api/payments/razorpay/verify", { method: "POST", body: JSON.stringify({
+            order_id: myOrder.id, razorpay_order_id: resp.razorpay_order_id,
+            razorpay_payment_id: resp.razorpay_payment_id, razorpay_signature: resp.razorpay_signature }) });
+          const d = await v.json().catch(() => ({}));
+          rzpOpen = false;
+          if (v.ok && d.order_status === "paid") return showPaid(items, myOrder.amount_cents);
+          toast(v.ok ? "Payment received but the item sold out, so it will be refunded." : ((d.detail) || "Could not confirm the payment."), true);
+        } catch { rzpOpen = false; toast("Payment taken, but we could not confirm it yet. It will update shortly.", true); }
+        setHold(null, null); load();
+      },
+      modal: { ondismiss: () => { rzpOpen = false; renderHold(); } },
+    });
+    rz.on("payment.failed", (resp) => toast((resp.error && resp.error.description) || "Payment failed. Try again.", true));
+    rz.open();
+  } catch { toast("Could not open Razorpay. Check your connection and try again.", true); renderHold(); }
+}
+
 function tick() {
   if (queue.state === "admitted" || queue.state === "waiting") renderQueue();
   if (!hold) return;
   const iso = /Z|[+-]\d\d:?\d\d$/.test(hold.expires_at) ? hold.expires_at : hold.expires_at + "Z";
   const left = Math.max(0, Math.floor((new Date(iso) - Date.now()) / 1000));
+  if (left === 0 && rzpOpen) return;   // never yank the page out from under an open payment window
   if (left === 0) { setHold(null, null); toast("Your hold expired.", true); load(); return; }
   const t = $("#timer");
   t.textContent = String(Math.floor(left / 60)).padStart(2, "0") + ":" + String(left % 60).padStart(2, "0");
@@ -590,6 +706,12 @@ function start() {
 // Coming back via the browser's back/forward buttons can restore the old page from
 // its cache with the session still in memory; treat that like a fresh visit.
 window.addEventListener("pageshow", (e) => { if (e.persisted && session) logout(); });
+
+fetch("/api/payments/config").then((r) => r.json()).then((c) => {
+  payments = c;
+  $("#payNote").textContent = c.provider === "razorpay" ? "payments by Razorpay" : "payments are simulated";
+  renderHold();
+}).catch(() => {});
 
 setInterval(tick, 500);
 if (session) start(); else show();

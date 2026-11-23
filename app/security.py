@@ -1,5 +1,7 @@
+import base64
 import hashlib
 import hmac
+import secrets
 import time
 import uuid
 
@@ -14,6 +16,30 @@ def hash_code(email: str, code: str) -> str:
     expiry and attempt cap. The "otp:" prefix keeps this use of the key separate from
     JWT signing."""
     return hmac.new(settings.jwt_secret.encode(), f"otp:{email}:{code}".encode(), hashlib.sha256).hexdigest()
+
+
+# ---- account passwords (scrypt, stdlib only) ------------------------------------------
+_SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2**14, 8, 1
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    digest = hashlib.scrypt(password.encode(), salt=salt, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P, maxmem=64 * 1024 * 1024)
+    b64 = lambda b: base64.b64encode(b).decode()
+    return f"scrypt${_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}${b64(salt)}${b64(digest)}"
+
+
+def verify_password(password: str, stored: str | None) -> bool:
+    """Constant-time check. A missing/garbled hash still burns the same CPU, so response
+    time does not reveal whether an address has a password."""
+    try:
+        _, n, r, p, salt, digest = (stored or "").split("$")
+        salt_b, want = base64.b64decode(salt), base64.b64decode(digest)
+        got = hashlib.scrypt(password.encode(), salt=salt_b, n=int(n), r=int(r), p=int(p), maxmem=64 * 1024 * 1024)
+        return hmac.compare_digest(got, want)
+    except Exception:
+        hashlib.scrypt(password.encode(), salt=b"\0" * 16, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P, maxmem=64 * 1024 * 1024)
+        return False
 
 
 # Fresh on every process start. Tokens carry it, so a restart invalidates every

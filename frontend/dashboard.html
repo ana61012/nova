@@ -14,11 +14,11 @@
 <section id="loginView" class="login">
   <h2>Operator sign-in</h2>
   <div class="sub">Operators only. This is separate from the shop login.</div>
-  <form id="loginForm" autocomplete="off">
+  <form id="loginForm">
     <label for="user">Username</label>
-    <input id="user" name="user" autocomplete="off" required>
+    <input id="user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
     <label for="pass">Password</label>
-    <input id="pass" name="pass" type="password" autocomplete="off" required>
+    <input id="pass" name="password" type="password" autocomplete="current-password" required>
     <button class="buy" type="submit" id="loginBtn">Sign in</button>
     <div class="err" id="loginErr" role="alert"></div>
   </form>
@@ -72,7 +72,7 @@ function showLogin(message) {
   $("loginErr").textContent = message || "";
   $("pass").value = "";
   $("rows").innerHTML = "";
-  $("user").focus();
+  ($("user").value ? $("pass") : $("user")).focus();
 }
 
 function showDashboard() {
@@ -90,12 +90,17 @@ $("loginForm").addEventListener("submit", async (e) => {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username: $("user").value.trim(), password: $("pass").value }),
     });
-    if (r.status === 429) { $("loginErr").textContent = "Too many attempts. Wait a moment and try again."; return; }
-    if (!r.ok) { $("loginErr").textContent = r.status === 401 ? "Wrong username or password." : "Could not sign in."; return; }
+    if (r.status === 429) {
+      const wait = Number(r.headers.get("Retry-After")) || 5;
+      $("loginErr").textContent = `Too many attempts. Wait ${wait}s and try again.`; return;
+    }
+    if (r.status === 401) { $("loginErr").textContent = "Wrong username or password. (Defaults come from DROP_ADMIN_USERNAME / DROP_ADMIN_PASSWORD.)"; return; }
+    if (!r.ok) { $("loginErr").textContent = `Could not sign in (server answered ${r.status}). Is the API up to date and running?`; return; }
     token = (await r.json()).token;
+    if (!token) { $("loginErr").textContent = "The server did not return a session token."; return; }
     $("pass").value = "";
     showDashboard();
-  } catch { $("loginErr").textContent = "Could not reach the server."; }
+  } catch { $("loginErr").textContent = "Could not reach the server. Is it running at this address?"; }
   finally { btn.disabled = false; }
 });
 

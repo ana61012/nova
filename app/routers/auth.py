@@ -1,19 +1,29 @@
-"""Passwordless sign-in: email a one-time code, exchange it for a JWT.
+"""Shop sign-in. Two ways in, both returning the same JWT:
+
+    POST /api/auth/signup        {email, password}  -> 201 {token, user_id, email}   (create account)
+    POST /api/auth/login         {email, password}  -> 200 {token, user_id, email}
+
+Or passwordless: email a one-time code, exchange it for a JWT.
 
     POST /api/auth/request-code  {email}        -> 202 (always, whether or not the address is known)
     POST /api/auth/verify-code   {email, code}  -> 200 {token, user_id, email}
     POST /api/admin/login        {username, password} -> 200 {token, expires_in}   (dashboard only)
 
-There is no separate signup: the first successful verification creates the account.
+With the code flow there is no separate signup: the first successful verification creates the account.
 """
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..db import get_session
 from ..ratelimit import limit_auth
-from ..schemas import AdminLoginIn, AdminTokenOut, CodeSentOut, EmailIn, TokenOut, VerifyIn
-from ..security import check_admin_credentials, create_admin_token, create_token
+from ..models import User
+from ..schemas import AdminLoginIn, AdminTokenOut, CodeSentOut, EmailIn, LoginIn, PasswordIn, TokenOut, VerifyIn
+from ..security import check_admin_credentials, create_admin_token, create_token, hash_password, verify_password
 from ..services import mailer, otp
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -46,6 +56,34 @@ async def verify_code(body: VerifyIn, request: Request, session: AsyncSession = 
     # One message for wrong, expired, used, locked-out and unknown-address alike.
     if user is None:
         raise HTTPException(401, "Invalid or expired code")
+    return TokenOut(token=create_token(user.id), user_id=user.id, email=email)
+
+
+@router.post("/signup", response_model=TokenOut, status_code=201)
+async def signup(body: PasswordIn, request: Request, session: AsyncSession = Depends(get_session)):
+    limit_auth(request)
+    email = body.email.lower()
+    taken = HTTPException(409, "An account with this email already exists. Try logging in.")
+    if (await session.execute(select(User.id).where(User.email == email))).first():
+        raise taken
+    user = User(email=email, password_hash=await asyncio.to_thread(hash_password, body.password))
+    session.add(user)
+    try:
+        await session.commit()
+    except IntegrityError:  # two signups raced on the same address
+        await session.rollback()
+        raise taken
+    return TokenOut(token=create_token(user.id), user_id=user.id, email=email)
+
+
+@router.post("/login", response_model=TokenOut)
+async def login(body: LoginIn, request: Request, session: AsyncSession = Depends(get_session)):
+    limit_auth(request)
+    email = body.email.lower()
+    user = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
+    ok = await asyncio.to_thread(verify_password, body.password, user.password_hash if user else None)
+    if user is None or not ok:
+        raise HTTPException(401, "Wrong email or password")  # same answer for unknown address and bad password
     return TokenOut(token=create_token(user.id), user_id=user.id, email=email)
 
 

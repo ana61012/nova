@@ -140,11 +140,6 @@ async def test_malformed_input_is_rejected(api):
         assert (await verify(api, "ann@example.com", bad)).status_code == 422
 
 
-async def test_old_password_endpoints_are_gone(api):
-    r = await api.post("/api/auth/signup", json={"email": "a@example.com", "password": "password123"})
-    assert r.status_code in (404, 405)
-
-
 async def test_auth_endpoints_are_rate_limited_per_ip(api, monkeypatch):
     monkeypatch.setattr(settings, "rate_limit_enabled", True)
     monkeypatch.setattr(ratelimit, "auth_ip_limiter", TokenBucket(3, 0.001))

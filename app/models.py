@@ -57,6 +57,8 @@ class User(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     email: Mapped[str] = mapped_column(String(254), unique=True)
+    # scrypt hash; NULL for accounts that only ever signed in with an emailed code.
+    password_hash: Mapped[str | None] = mapped_column(String(256), nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

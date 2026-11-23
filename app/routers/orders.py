@@ -90,7 +90,7 @@ async def simulate_payment(
 ):
     """Stand-in for the payment gateway: builds a signed event and feeds it to the
     same code path as the real webhook. `duplicate=true` delivers it twice."""
-    if not settings.dev_mode:
+    if not settings.dev_mode or settings.razorpay_enabled:  # never let the fake gateway mark real orders paid
         raise HTTPException(404, "Not found")
     if outcome not in _EVENT_TYPES:
         raise HTTPException(422, f"outcome must be one of {sorted(_EVENT_TYPES)}")

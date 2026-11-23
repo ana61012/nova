@@ -10,11 +10,11 @@ from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import select
 
-from .config import settings
+from .config import DEV_ADMIN_PASSWORD, settings
 from .db import SessionLocal, init_db
 from .metrics import HTTP_LATENCY, QUEUE_ADMITTED, QUEUE_WAITING
 from .models import Drop, Inventory, Product
-from .routers import auth, drops, orders, queue as queue_router, reservations, stats
+from .routers import auth, drops, orders, payments, queue as queue_router, reservations, stats
 from .services import inventory, outbox, queue
 
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
@@ -81,6 +81,9 @@ async def outbox_step():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.assert_safe_for_production()
+    if settings.dev_mode and settings.admin_password == DEV_ADMIN_PASSWORD:
+        print(f"[nova] dashboard login at /dashboard: {settings.admin_username} / {DEV_ADMIN_PASSWORD}", flush=True)
+    print(f"[nova] payments: {'Razorpay' if settings.razorpay_enabled else 'simulated'}", flush=True)
     await init_db()
     await seed_if_empty()
     tasks = [
@@ -96,7 +99,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="nova", lifespan=lifespan)
-for r in (auth.router, auth.admin_router, drops.router, queue_router.router, reservations.router, orders.router, stats.router):
+for r in (auth.router, auth.admin_router, drops.router, queue_router.router, reservations.router, orders.router, payments.router, stats.router):
     app.include_router(r)
 
 

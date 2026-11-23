@@ -55,6 +55,18 @@ class Settings(BaseSettings):
     webhook_secret: str = DEV_WEBHOOK_SECRET
     dev_mode: bool = True  # enables the payment simulator endpoint
 
+    # Razorpay. Leave the key id/secret empty to keep the simulated gateway; set both
+    # (DROP_RAZORPAY_KEY_ID / DROP_RAZORPAY_KEY_SECRET) and real checkout turns on.
+    # The webhook secret is the one you type in Dashboard > Settings > Webhooks.
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+    razorpay_webhook_secret: str = ""
+    razorpay_api_base: str = "https://api.razorpay.com/v1"
+
+    @property
+    def razorpay_enabled(self) -> bool:
+        return bool(self.razorpay_key_id and self.razorpay_key_secret)
+
     # Rate limits (token buckets)
     rate_limit_enabled: bool = True
     rl_user_capacity: int = 10

@@ -55,6 +55,14 @@ class VerifyIn(EmailIn):
     code: str = Field(pattern=r"^\d{6}$")
 
 
+class PasswordIn(EmailIn):
+    password: str = Field(min_length=8, max_length=200)
+
+
+class LoginIn(EmailIn):
+    password: str = Field(min_length=1, max_length=200)
+
+
 class CodeSentOut(BaseModel):
     detail: str
     expires_in: int
