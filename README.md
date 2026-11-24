@@ -2,7 +2,7 @@
 
 A limited-drop commerce backend for small-run fashion releases, built for the moment thousands of people try to buy a few hundred items at once. The goal is simple to state and hard to get right: **never oversell, never double-charge, stay fair under load.**
 
-**Live:** <https://YOUR-APP.onrender.com> · **Dashboard:** <https://YOUR-APP.onrender.com/dashboard> · **API docs:** <https://YOUR-APP.onrender.com/docs>
+**Live:** https://nova-2w36.onrender.com · 
 
 > Hosted on Render (Docker) with a Neon serverless Postgres database. The free Render tier sleeps when idle, so the first request after a quiet period can take a while.
 
