@@ -94,13 +94,13 @@ $("loginForm").addEventListener("submit", async (e) => {
       const wait = Number(r.headers.get("Retry-After")) || 5;
       $("loginErr").textContent = `Too many attempts. Wait ${wait}s and try again.`; return;
     }
-    if (r.status === 401) { $("loginErr").textContent = "Wrong username or password. (Defaults come from DROP_ADMIN_USERNAME / DROP_ADMIN_PASSWORD.)"; return; }
-    if (!r.ok) { $("loginErr").textContent = `Could not sign in (server answered ${r.status}). Is the API up to date and running?`; return; }
+    if (r.status === 401) { $("loginErr").textContent = "Invalid ID or password"; return; }
+    if (!r.ok) { $("loginErr").textContent = "Invalid ID or password"; return; }
     token = (await r.json()).token;
-    if (!token) { $("loginErr").textContent = "The server did not return a session token."; return; }
+    if (!token) { $("loginErr").textContent = "Invalid ID or password"; return; }
     $("pass").value = "";
     showDashboard();
-  } catch { $("loginErr").textContent = "Could not reach the server. Is it running at this address?"; }
+  } catch { $("loginErr").textContent = "Invalid ID or password"; }
   finally { btn.disabled = false; }
 });
 

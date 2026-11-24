@@ -86,7 +86,7 @@ def user_from_token(token: str) -> str:
 
 def check_admin_credentials(username: str, password: str) -> bool:
     # Compare both fields in constant time and never short-circuit between them.
-    ok_user = hmac.compare_digest(username.encode(), settings.admin_username.encode())
+    ok_user = hmac.compare_digest(username.strip().lower().encode(), settings.admin_username.strip().lower().encode())
     ok_pass = hmac.compare_digest(password.encode(), settings.admin_password.encode())
     return ok_user and ok_pass
 

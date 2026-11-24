@@ -94,7 +94,7 @@ admin_router = APIRouter(prefix="/api/admin", tags=["admin"])
 async def admin_login(body: AdminLoginIn, request: Request):
     limit_auth(request)  # same tight per-IP bucket as the shop sign-in: this takes password guesses
     if not check_admin_credentials(body.username, body.password):
-        raise HTTPException(401, "Wrong username or password")
+        raise HTTPException(401, "Invalid ID or password")
     return AdminTokenOut(token=create_admin_token(), expires_in=settings.admin_jwt_ttl_seconds)
 
 

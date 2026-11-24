@@ -199,7 +199,7 @@ async function sendCode() {
 // authMode: "signup" (email + new password) | "login" (email + password) | "code" (emailed 6-digit code)
 let authMode = "signup";
 const MODE = {
-  signup: { btn: "Create account", hint: "Pick a password. You'll be signed in straight away.", pw: "new-password" },
+  signup: { btn: "Create account", hint: "Pick a password. You'll log in on the next step.", pw: "new-password" },
   login:  { btn: "Log in", hint: "", pw: "current-password" },
   code:   { btn: "Send me a code", hint: "No password needed. We'll email you a 6-digit code.", pw: "" },
 };
@@ -244,6 +244,14 @@ document.querySelector("#auth").addEventListener("submit", async (e) => {
       if (!r.ok) {
         const msg = await detail(r);
         $("#authErr").textContent = msg || (authMode === "signup" ? "Could not create the account." : "Could not log in.");
+        return;
+      }
+      if (authMode === "signup") {
+        // Account created: don't sign in automatically. Send them to the login form.
+        setMode("login");
+        $("#authEmail").value = email; $("#authPassword").value = "";
+        $("#authHint").textContent = "Account created. Please log in to continue.";
+        $("#authPassword").focus();
         return;
       }
       signedIn(await r.json());
