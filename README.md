@@ -2,7 +2,7 @@
 
 A limited-drop commerce backend (small-run fashion releases) built for the moment thousands of people try to buy a few hundred items at once. The goal is simple to state and hard to get right: **never oversell, never double-charge, stay fair under load.**
 
-**Stack:** FastAPI (async) · SQLAlchemy 2 · PostgreSQL (SQLite for zero-setup local runs) · JWT auth · Server-Sent Events · Prometheus · Angular 19 (standalone components, signals, animations) · Docker
+**Stack:** FastAPI (async) · SQLAlchemy 2 · PostgreSQL (SQLite for zero-setup local runs) · JWT auth · Server-Sent Events · Prometheus · Angular 19 (standalone components, signals, animations) · Razorpay · Docker
 
 ## Run it
 
@@ -21,9 +21,76 @@ pytest -q                       # 73 tests
 docker compose up --build       # Postgres + API + Prometheus
 ```
 
-Every setting is an environment variable with a `DROP_` prefix (or a `.env` file); see `app/config.py`.
+Every setting is an environment variable with a `DROP_` prefix (or a `.env` file); see `app/config.py`. To put it online, see [Deploy](#deploy).
 
 Requires Python 3.12 and Node 20+. For live-reload while working on the UI, keep `uvicorn` running and start `cd frontend && npm start`, then open http://localhost:4200 (it proxies `/api` to port 8000).
+
+## Deploy
+
+One container serves the API and the built Angular app, so the whole thing deploys as a single web service plus a Postgres database. These steps use **Render** (web service, Docker) and **Neon** (free Postgres); any host that runs one long-lived container works.
+
+> **Run exactly one instance.** The waiting-room admitter, stock sweeper and outbox relay are background loops inside the API process (see [Limitations](#limitations-known-deliberate)). Do not scale out.
+
+### 1. Database (Neon)
+
+Create a Neon project and copy the **direct** connection string (not the `-pooler` host). asyncpg does not understand libpq options, so rewrite it:
+
+```
+postgresql://USER:PASS@HOST/DB?sslmode=require&channel_binding=require      # what Neon gives you
+postgresql+asyncpg://USER:PASS@HOST/DB?ssl=require                           # what DROP_DATABASE_URL needs
+```
+
+Tables are created on first boot and the four demo products are seeded (edit `SEED` in `app/main.py` before the first launch to change them).
+
+### 2. Web service (Render)
+
+1. Push the repo to GitHub.
+2. Render: **New, Web Service**, pick the repo, **Language: Docker**, set the **Health Check Path** to `/health`.
+3. Set the environment variables below, then deploy. The first build compiles the Angular app and takes a few minutes.
+
+| Variable | Value |
+|---|---|
+| `PORT` | `8000` (the Dockerfile binds this port) |
+| `FORWARDED_ALLOW_IPS` | `*` (so per-IP rate limits see real client IPs, not the proxy's) |
+| `DROP_DATABASE_URL` | the `postgresql+asyncpg://...?ssl=require` URL from step 1 |
+| `DROP_DEV_MODE` | `false` for a real store, `true` for a demo with simulated payments |
+| `DROP_JWT_SECRET` | random, e.g. `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `DROP_WEBHOOK_SECRET` | random (still required when dev mode is off, even if you only use Razorpay) |
+| `DROP_ADMIN_PASSWORD` | random; this is the `/dashboard` login for `DROP_ADMIN_USERNAME` (default `admin`) |
+| `DROP_EMAIL_BACKEND` | `smtp` (real email) or `console` (codes are printed to the service log) |
+| `DROP_SMTP_HOST`, `DROP_SMTP_PORT`, `DROP_SMTP_USER`, `DROP_SMTP_PASSWORD`, `DROP_SMTP_FROM` | when using `smtp` |
+| `DROP_RAZORPAY_KEY_ID`, `DROP_RAZORPAY_KEY_SECRET`, `DROP_RAZORPAY_WEBHOOK_SECRET` | when taking real payments |
+
+Your local `.env` is gitignored and is **not** uploaded; every variable has to be entered in Render. With `DROP_DEV_MODE=false` the app refuses to boot while the JWT secret, webhook secret or admin password still has its built-in default, so a boot failure naming those three means they are missing or misspelled (the `DROP_` prefix is required).
+
+### 3. Razorpay
+
+1. Generate an API key pair (use **Test Mode** first). The key id is `DROP_RAZORPAY_KEY_ID`; the secret, shown once, is `DROP_RAZORPAY_KEY_SECRET`.
+2. Dashboard, **Settings, Webhooks, Add New Webhook**:
+   - URL: `https://YOUR-APP.onrender.com/webhooks/razorpay`
+   - Secret: a random string you invent. Put the **same** string in `DROP_RAZORPAY_WEBHOOK_SECRET`. It is not `DROP_WEBHOOK_SECRET` (that one signs the dev simulator) and not the API key secret.
+   - Events: `payment.captured`, `order.paid`, `payment.failed`, `refund.processed`
+3. Make a test purchase and check the webhook delivery log: `200` means the secret matches, `401` means it does not. With no webhook secret configured the server rejects every webhook.
+
+When Razorpay keys are set, the dev payment simulator is disabled regardless of `DROP_DEV_MODE`.
+
+### 4. Hosting on a free tier
+
+Render's free plan works for demos, with three caveats:
+
+- **It sleeps after 15 minutes without traffic** and takes about a minute to wake, and the background loops stop while it sleeps (nobody is admitted from the queue). Point a free uptime monitor (UptimeRobot, cron-job.org) at `/health` every 5 to 10 minutes.
+- **Outbound SMTP ports 25, 465 and 587 are blocked** on free web services, so Gmail SMTP will not work. Use a provider that offers port `2525` (for example Brevo or Mailgun; check yours), or `DROP_EMAIL_BACKEND=console` and read codes from the logs.
+- **Render's own free Postgres expires after 30 days** and has no backups, which is why the steps above use Neon.
+
+### 5. Verify
+
+- `/` loads the shop; sign up and receive a code.
+- `/dashboard` accepts `DROP_ADMIN_USERNAME` / `DROP_ADMIN_PASSWORD` and the inventory audit passes.
+- Join the queue, reserve, check out with a Razorpay **test** card, and confirm the order reaches `paid`.
+
+### Self-hosting with Docker Compose
+
+`docker-compose.yml` is a local development setup (Postgres on a published port with a throwaway password, no volume, no HTTPS). For a VPS, use a private database network, a named volume for Postgres data, a reverse proxy such as Caddy for HTTPS (with response buffering off for `/api/queue/stream`), `--proxy-headers --forwarded-allow-ips="*"` on uvicorn, and keep `/metrics` off the public internet.
 
 ## Frontend
 
@@ -84,7 +151,8 @@ Transitions are conditional `UPDATE`s checked against an `ALLOWED` table, so an 
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/auth/signup`, `/api/auth/login` | Returns a JWT |
+| POST | `/api/auth/request-code`, `/api/auth/verify-code` | Emailed one-time code sign-in, returns a JWT |
+| POST | `/api/auth/signup`, `/api/auth/login` | Password sign-in, returns a JWT |
 | GET | `/api/drops/current` | Products with live stock |
 | POST | `/api/queue/join` · `/leave` | Join or leave the waiting room |
 | GET | `/api/queue/status` | Your state and position |
@@ -93,8 +161,11 @@ Transitions are conditional `UPDATE`s checked against an `ALLOWED` table, so an 
 | DELETE | `/api/reservations/{id}` | Release a hold |
 | POST | `/api/orders` | Create an order from a live reservation (idempotent per reservation) |
 | GET | `/api/orders/{id}` | Your order |
-| POST | `/webhooks/payments` | Gateway entry point, HMAC-signed |
-| POST | `/api/dev/payments/{order_id}/simulate?outcome=success\|fail\|refund&duplicate=` | Fake gateway for demos (`DROP_DEV_MODE=false` disables it) |
+| POST | `/webhooks/payments` | Simulated-gateway entry point, HMAC-signed with `DROP_WEBHOOK_SECRET` |
+| GET | `/api/payments/config` | Which provider is active (`razorpay` or `simulated`) |
+| POST | `/api/payments/razorpay/order` · `/verify` | Create a Razorpay order for checkout; verify the checkout signature |
+| POST | `/webhooks/razorpay` | Razorpay entry point, HMAC-signed with `DROP_RAZORPAY_WEBHOOK_SECRET` |
+| POST | `/api/dev/payments/{order_id}/simulate?outcome=success\|fail\|refund&duplicate=` | Fake gateway for demos (disabled when `DROP_DEV_MODE=false` or Razorpay keys are set) |
 | POST | `/api/admin/login` | `{username, password}` -> short-lived admin token (dashboard only; separate from the shop's emailed-code login) |
 | GET | `/api/stats` | **Admin token required.** Dashboard data plus the **inventory audit** (`available + held + sold == total`) |
 | GET | `/metrics` | Prometheus |
@@ -135,9 +206,11 @@ An early run of this test dropped a few client connections under saturation (a k
 ## Limitations (known, deliberate)
 
 - **Scaling out:** the admitter, sweeper and outbox relay run inside the API process, and the default rate limiter is per-process, so run one worker. The queue and reservation SQL is concurrency-safe by construction (conditional updates, unique indexes), but multi-worker needs background jobs split into their own process and a shared limiter. The outbox relay already tolerates overlap (`processed_events`); `SKIP LOCKED` would remove the duplicated work.
-- **Payments are simulated.** The webhook handler is real (signature, dedupe, state machine); the gateway is a dev endpoint.
-- **Tests run on SQLite.** The Postgres path (`docker-compose.yml`) is configured but was not exercised in development.
-- **Auth is minimal:** no email verification, refresh tokens or password reset. scrypt parameters are lowered for speed; raise them for real use. Change `DROP_JWT_SECRET`, `DROP_WEBHOOK_SECRET` and `DROP_ADMIN_PASSWORD` before deploying (with `DROP_DEV_MODE=false` the server refuses to boot while any still has its default). The dashboard login is one shared operator account (`DROP_ADMIN_USERNAME` / `DROP_ADMIN_PASSWORD`, token lifetime `DROP_ADMIN_JWT_TTL_SECONDS`). Its token is kept only in page memory, so reloading, re-opening the page or restarting the server always returns to the login screen.
+- **Payments:** Razorpay checkout and webhooks are implemented (signature check, dedupe, state machine). Without Razorpay keys the gateway is a simulated dev endpoint. Start with Razorpay **test** keys.
+- **Tests and the recorded load test run on SQLite.** The app is deployable on Postgres (Neon via asyncpg, see [Deploy](#deploy)), but the concurrency test suite and the latency numbers above have not been run against Postgres. Run a staging drop before a real one.
+- **Free-tier hosting** sleeps when idle, which pauses the queue admitter and sweeper; see [Deploy](#deploy).
+- **No migrations tool:** tables are created on boot and only missing nullable columns are added in place.
+- **Auth is minimal:** no email verification, refresh tokens or password reset. scrypt parameters are lowered for speed; raise them for real use. Set your own `DROP_JWT_SECRET`, `DROP_WEBHOOK_SECRET` and `DROP_ADMIN_PASSWORD` before deploying (with `DROP_DEV_MODE=false` the server refuses to boot while any still has its default). Never commit `.env`. The dashboard login is one shared operator account (`DROP_ADMIN_USERNAME` / `DROP_ADMIN_PASSWORD`, token lifetime `DROP_ADMIN_JWT_TTL_SECONDS`). Its token is kept only in page memory, so reloading, re-opening the page or restarting the server always returns to the login screen.
 - Prometheus is scraped, but no Grafana dashboard ships; `/dashboard` covers live viewing.
 
 ## Project layout
