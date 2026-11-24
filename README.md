@@ -2,11 +2,12 @@
 
 A limited-drop commerce backend (small-run fashion releases) built for the moment thousands of people try to buy a few hundred items at once. The goal is simple to state and hard to get right: **never oversell, never double-charge, stay fair under load.**
 
-**Stack:** FastAPI (async) · SQLAlchemy 2 · PostgreSQL (SQLite for zero-setup local runs) · JWT auth · Server-Sent Events · Prometheus · vanilla JS frontend
+**Stack:** FastAPI (async) · SQLAlchemy 2 · PostgreSQL (SQLite for zero-setup local runs) · JWT auth · Server-Sent Events · Prometheus · Angular frontend
 
 ## Run it
 
 ```bash
+(cd frontend && npm install && npm run build)   # builds the Angular app into frontend/dist
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
@@ -137,7 +138,7 @@ app/
   services/          inventory (reservations), queue, orders (state machine + webhooks), outbox
   routers/           HTTP layer: auth, drops, queue, reservations, orders, stats
   security.py        scrypt + JWT          ratelimit.py   token bucket + dependency
-frontend/            index.html (shop), dashboard.html (live view)
+frontend/            Angular app: src/app/shop (shop), src/app/dashboard (live view), src/styles.css (shared styles)
 scripts/loadtest.py  drop simulator and auditor
 tests/               73 tests: concurrency, queue, payments, outbox, auth, rate limiting
 ```

@@ -8,3 +8,7 @@ __pycache__/
 .pytest_cache/
 server.log
 .idea/
+# Angular frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/

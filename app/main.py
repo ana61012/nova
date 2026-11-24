@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import select
@@ -18,6 +18,9 @@ from .routers import auth, drops, orders, payments, queue as queue_router, reser
 from .services import inventory, outbox, queue
 
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
+# The Angular app builds into frontend/dist/nova/browser (`npm run build` in frontend/).
+# Until it has been built, /static falls back to the raw frontend folder so the product images still load.
+BUILD = FRONTEND / "dist" / "nova" / "browser"
 
 SEED = [
     # image_emoji holds a short key; the frontend shows /static/clothes/<key>.webp
@@ -128,15 +131,29 @@ async def metrics():
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
-app.mount("/static", StaticFiles(directory=FRONTEND), name="static")
+app.mount("/static", StaticFiles(directory=BUILD if BUILD.is_dir() else FRONTEND), name="static")
+
+_NOT_BUILT = (
+    "<!doctype html><meta charset=utf-8><title>nova</title>"
+    "<p>The frontend has not been built yet. Run <code>cd frontend &amp;&amp; npm install &amp;&amp; npm run build</code>.</p>"
+)
 
 
+def _spa() -> Response:
+    # no-store: the browser must not keep these pages (and their JS state) for back/forward restores.
+    headers = {"Cache-Control": "no-store"}
+    page = BUILD / "index.html"
+    if page.is_file():
+        return FileResponse(page, headers=headers)
+    return HTMLResponse(_NOT_BUILT, headers=headers)
+
+
+# One Angular app serves both routes; the router picks the page from the URL.
 @app.get("/")
 async def index():
-    return FileResponse(FRONTEND / "index.html")
+    return _spa()
 
 
 @app.get("/dashboard")
 async def dashboard():
-    # no-store: the browser must not keep this page (and its JS state) for back/forward restores.
-    return FileResponse(FRONTEND / "dashboard.html", headers={"Cache-Control": "no-store"})
+    return _spa()
