@@ -1,12 +1,24 @@
 import os
 import tempfile
+import time
 
 # The app builds its engine at import time, so point it at a throwaway file
 # before anything imports `app`.
 _API_DB = os.path.join(tempfile.mkdtemp(), "api_test.db")
 os.environ["DROP_DATABASE_URL"] = f"sqlite+aiosqlite:///{_API_DB}"
+# Env vars beat the developer's local .env, so real Razorpay keys (or a non-dev
+# mode) in .env can't leak into the suite. Tests expect the simulated gateway.
+for _name, _value in {
+    "DROP_RAZORPAY_KEY_ID": "",
+    "DROP_RAZORPAY_KEY_SECRET": "",
+    "DROP_RAZORPAY_WEBHOOK_SECRET": "",
+    "DROP_DEV_MODE": "true",
+    "DROP_WEBHOOK_SECRET": "whsec_dev",
+}.items():
+    os.environ[_name] = _value
 
 import httpx  # noqa: E402
+import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker  # noqa: E402
 from sqlalchemy.pool import NullPool  # noqa: E402
@@ -17,6 +29,33 @@ from app.config import settings  # noqa: E402
 from app.db import init_db, make_engine  # noqa: E402
 from app.models import Drop, Inventory, Product, utcnow  # noqa: E402
 from app.services import mailer as mailer_mod  # noqa: E402
+
+
+def _remove_db_files(path: str) -> None:
+    """Delete a temp SQLite file and its WAL/SHM siblings.
+
+    On Windows a just-closed SQLite file can stay locked for a moment (WinError 32),
+    so retry briefly and then give up quietly: a leftover temp file must never
+    turn a passing test into an error.
+    """
+    for suffix in ("", "-wal", "-shm"):
+        for attempt in range(5):
+            try:
+                os.remove(path + suffix)
+                break
+            except FileNotFoundError:
+                break
+            except PermissionError:
+                time.sleep(0.05 * (attempt + 1))
+
+
+@pytest.fixture(autouse=True)
+def _simulated_payments(monkeypatch):
+    """Every test starts on the simulated gateway, whatever the local .env says."""
+    monkeypatch.setattr(settings, "razorpay_key_id", "")
+    monkeypatch.setattr(settings, "razorpay_key_secret", "")
+    monkeypatch.setattr(settings, "razorpay_webhook_secret", "")
+    monkeypatch.setattr(settings, "dev_mode", True)
 
 
 # (name, price_cents, image key, stock) -> product ids 1..4
@@ -38,11 +77,7 @@ async def sessions():
     factory = async_sessionmaker(eng, expire_on_commit=False)
     yield factory
     await eng.dispose()
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            os.remove(path + suffix)
-        except FileNotFoundError:
-            pass
+    _remove_db_files(path)
 
 
 @pytest_asyncio.fixture
@@ -93,11 +128,7 @@ async def api(monkeypatch):
         await test_engine.dispose()
         db_mod.engine = orig_engine
         db_mod.SessionLocal.configure(bind=orig_engine)
-        for suffix in ("", "-wal", "-shm"):
-            try:
-                os.remove(path + suffix)
-            except FileNotFoundError:
-                pass
+        _remove_db_files(path)
         ratelimit.user_limiter = ratelimit.TokenBucket(settings.rl_user_capacity, settings.rl_user_refill_per_sec)
         ratelimit.ip_limiter = ratelimit.TokenBucket(settings.rl_ip_capacity, settings.rl_ip_refill_per_sec)
         ratelimit.auth_ip_limiter = ratelimit.TokenBucket(settings.rl_auth_capacity, settings.rl_auth_refill_per_sec)
