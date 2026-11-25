@@ -57,7 +57,8 @@ Tables are created on first boot and the four demo products are seeded (edit `SE
 | `DROP_JWT_SECRET` | random, e.g. `python -c "import secrets; print(secrets.token_hex(32))"` |
 | `DROP_WEBHOOK_SECRET` | random (still required when dev mode is off, even if you only use Razorpay) |
 | `DROP_ADMIN_PASSWORD` | random; this is the `/dashboard` login for `DROP_ADMIN_USERNAME` (default `admin`) |
-| `DROP_EMAIL_BACKEND` | `smtp` (real email) or `console` (codes are printed to the service log) |
+| `DROP_EMAIL_BACKEND` | `brevo` (real email over HTTPS, works on Render's free tier), `smtp`, or `console` (codes are printed to the service log) |
+| `DROP_BREVO_API_KEY`, `DROP_BREVO_SENDER_EMAIL`, `DROP_BREVO_SENDER_NAME` | when using `brevo`; the API key needs only the **Transactional email** permission, and the sender email must be verified in Brevo |
 | `DROP_SMTP_HOST`, `DROP_SMTP_PORT`, `DROP_SMTP_USER`, `DROP_SMTP_PASSWORD`, `DROP_SMTP_FROM` | when using `smtp` |
 | `DROP_RAZORPAY_KEY_ID`, `DROP_RAZORPAY_KEY_SECRET`, `DROP_RAZORPAY_WEBHOOK_SECRET` | when taking real payments |
 
@@ -79,7 +80,7 @@ When Razorpay keys are set, the dev payment simulator is disabled regardless of 
 Render's free plan works for demos, with three caveats:
 
 - **It sleeps after 15 minutes without traffic** and takes about a minute to wake, and the background loops stop while it sleeps (nobody is admitted from the queue). Point a free uptime monitor (UptimeRobot, cron-job.org) at `/health` every 5 to 10 minutes.
-- **Outbound SMTP ports 25, 465 and 587 are blocked** on free web services, so Gmail SMTP will not work. Use a provider that offers port `2525` (for example Brevo or Mailgun; check yours), or `DROP_EMAIL_BACKEND=console` and read codes from the logs.
+- **Outbound SMTP ports 25, 465 and 587 are blocked** on free web services, so Gmail SMTP will not work. Use `DROP_EMAIL_BACKEND=brevo`, which sends over HTTPS, or `DROP_EMAIL_BACKEND=console` and read codes from the logs.
 - **Render's own free Postgres expires after 30 days** and has no backups, which is why the steps above use Neon.
 
 ### 5. Verify

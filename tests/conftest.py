@@ -1,6 +1,7 @@
 import os
 import tempfile
 import time
+from contextlib import asynccontextmanager
 
 # The app builds its engine at import time, so point it at a throwaway file
 # before anything imports `app`.
@@ -16,6 +17,11 @@ for _name, _value in {
     "DROP_WEBHOOK_SECRET": "whsec_dev",
 }.items():
     os.environ[_name] = _value
+
+# Set TEST_DATABASE_URL (postgresql+asyncpg://...) to run the suite against Postgres
+# instead of per-test SQLite files. See docker-compose.test.yml / "Testing on Postgres".
+PG_URL = os.environ.get("TEST_DATABASE_URL", "")
+USING_PG = PG_URL.startswith("postgresql")
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402
@@ -49,6 +55,48 @@ def _remove_db_files(path: str) -> None:
                 time.sleep(0.05 * (attempt + 1))
 
 
+async def _wipe_pg(eng) -> None:
+    from sqlalchemy import text
+    async with eng.begin() as conn:
+        await conn.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
+        await conn.execute(text("CREATE SCHEMA public"))
+
+
+@asynccontextmanager
+async def fresh_engine(poolclass=None):
+    """A brand-new, empty database for one test: a temp SQLite file, or (with
+    TEST_DATABASE_URL set) the Postgres database with its schema wiped."""
+    if USING_PG:
+        eng = make_engine(PG_URL, poolclass=NullPool)
+        await _wipe_pg(eng)
+        try:
+            yield eng
+        finally:
+            await eng.dispose()
+            cleanup = make_engine(PG_URL, poolclass=NullPool)
+            try:
+                await _wipe_pg(cleanup)
+            finally:
+                await cleanup.dispose()
+        return
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    eng = make_engine(f"sqlite+aiosqlite:///{path}", poolclass=poolclass)
+    try:
+        yield eng
+    finally:
+        await eng.dispose()
+        _remove_db_files(path)
+
+
+def pytest_collection_modifyitems(config, items):
+    if USING_PG:
+        skip = pytest.mark.skip(reason="SQLite-specific")
+        for item in items:
+            if "sqlite_only" in item.keywords:
+                item.add_marker(skip)
+
+
 @pytest.fixture(autouse=True)
 def _simulated_payments(monkeypatch):
     """Every test starts on the simulated gateway, whatever the local .env says."""
@@ -69,15 +117,10 @@ TEST_SEED = [
 
 @pytest_asyncio.fixture
 async def sessions():
-    """Fresh file-backed DB per test, so many sessions can write concurrently."""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    eng = make_engine(f"sqlite+aiosqlite:///{path}")
-    await init_db(eng)
-    factory = async_sessionmaker(eng, expire_on_commit=False)
-    yield factory
-    await eng.dispose()
-    _remove_db_files(path)
+    """Fresh DB per test, so many sessions can write concurrently."""
+    async with fresh_engine() as eng:
+        await init_db(eng)
+        yield async_sessionmaker(eng, expire_on_commit=False)
 
 
 @pytest_asyncio.fixture
@@ -111,27 +154,22 @@ async def api(monkeypatch):
     monkeypatch.setattr(settings, "rate_limit_enabled", False)
     monkeypatch.setattr(mailer_mod, "mailer", mailer_mod.MemoryMailer())  # capture "emails" in memory
 
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    test_engine = make_engine(f"sqlite+aiosqlite:///{path}", poolclass=NullPool)
-    orig_engine = db_mod.engine
-    db_mod.engine = test_engine
-    db_mod.SessionLocal.configure(bind=test_engine)
-
-    try:
-        await init_db(test_engine)
-        await seed_if_empty()
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            yield client
-    finally:
-        await test_engine.dispose()
-        db_mod.engine = orig_engine
-        db_mod.SessionLocal.configure(bind=orig_engine)
-        _remove_db_files(path)
-        ratelimit.user_limiter = ratelimit.TokenBucket(settings.rl_user_capacity, settings.rl_user_refill_per_sec)
-        ratelimit.ip_limiter = ratelimit.TokenBucket(settings.rl_ip_capacity, settings.rl_ip_refill_per_sec)
-        ratelimit.auth_ip_limiter = ratelimit.TokenBucket(settings.rl_auth_capacity, settings.rl_auth_refill_per_sec)
+    async with fresh_engine(poolclass=NullPool) as test_engine:
+        orig_engine = db_mod.engine
+        db_mod.engine = test_engine
+        db_mod.SessionLocal.configure(bind=test_engine)
+        try:
+            await init_db(test_engine)
+            await seed_if_empty()
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                yield client
+        finally:
+            db_mod.engine = orig_engine
+            db_mod.SessionLocal.configure(bind=orig_engine)
+            ratelimit.user_limiter = ratelimit.TokenBucket(settings.rl_user_capacity, settings.rl_user_refill_per_sec)
+            ratelimit.ip_limiter = ratelimit.TokenBucket(settings.rl_ip_capacity, settings.rl_ip_refill_per_sec)
+            ratelimit.auth_ip_limiter = ratelimit.TokenBucket(settings.rl_auth_capacity, settings.rl_auth_refill_per_sec)
 
 # ---- helpers shared by API tests -------------------------------------------
 

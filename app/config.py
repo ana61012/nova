@@ -43,13 +43,17 @@ class Settings(BaseSettings):
 
     # Email delivery. "console" prints the code to the server log (local dev),
     # "memory" keeps it in-process and exposes it to the dev endpoint (tests and
-    # the load test), "smtp" really sends it.
+    # the load test), "smtp" sends over SMTP, "brevo" sends over HTTPS (use this on
+    # hosts that block SMTP ports, such as Render's free tier).
     email_backend: str = "console"
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_from: str = "nova <no-reply@example.com>"
+    brevo_api_key: str = ""
+    brevo_sender_email: str = ""        # must be a sender verified in Brevo
+    brevo_sender_name: str = "nova"
 
     # Payments (a fake gateway signs webhooks with this shared secret)
     webhook_secret: str = DEV_WEBHOOK_SECRET

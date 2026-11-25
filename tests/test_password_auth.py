@@ -51,6 +51,7 @@ async def test_code_only_account_cannot_be_claimed_by_password_signup(api):
     assert (await api.post("/api/auth/login", json={"email": "codey@example.com", "password": "hunter2hunter2"})).status_code == 401
 
 
+@pytest.mark.sqlite_only
 async def test_old_database_without_password_column_is_upgraded():
     """A dropengine.db made before password_hash existed must keep working."""
     fd, path = tempfile.mkstemp(suffix=".db"); os.close(fd)
